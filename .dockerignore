@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.uv/
+
+# Node
+node_modules/
+apps/dashboard/dist/
+
+# Dev / IDE
+.env
+.env.*
+!.env.example
+.git/
+.gitignore
+.DS_Store
+logs/
+*.log
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Docs
+*.md

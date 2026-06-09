@@ -1,0 +1,14 @@
+[project]
+name = "kio-shells"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "shared",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "loguru>=0.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

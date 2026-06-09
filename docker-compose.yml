@@ -1,0 +1,357 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# KIO1 AI Engineering Platform — full stack
+#
+# Start:   docker compose up --build
+# Dev:     docker compose up postgres nats   (then run services locally)
+# Migrate: docker compose run --rm migrate
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-common-env: &common-env
+  DATABASE_URL: postgresql+asyncpg://enisalimerge:enisalimerge@postgres:5432/enisalimerge
+  NATS_URL: nats://nats:4222
+  SESSION_MANAGER_URL: http://session_manager:8002
+  LM_ENGINE_URL: http://lm_engine:8001
+  USE_NATS: "true"
+  LOG_LEVEL: INFO
+  # Empty string → KioClient uses the kio_id as Docker DNS hostname (e.g. http://kio3:8013)
+  KIO_BASE_HOST: ""
+  # LLM — all services use the same provider; host.docker.internal reaches Ollama on the Mac host
+  LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:3b}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
+  LLM_PROVIDER_FALLBACK: ${LLM_PROVIDER_FALLBACK:-}
+
+x-kio-base: &kio-base
+  build:
+    context: .
+    dockerfile: apps/kio_shells/Dockerfile
+  restart: unless-stopped
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    nats:
+      condition: service_healthy
+    session_manager:
+      condition: service_started
+  environment:
+    <<: *common-env
+
+services:
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: enisalimerge
+      POSTGRES_PASSWORD: enisalimerge
+      POSTGRES_DB: enisalimerge
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U enisalimerge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    command:
+      - "--jetstream"
+      - "--store_dir=/data"
+      - "-m"
+      - "8222"
+    volumes:
+      - nats-data:/data
+    ports:
+      - "4222:4222"   # client
+      - "8222:8222"   # monitoring
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz | grep -q ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Database migrations (run-once job) ──────────────────────────────────────
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/session_manager/Dockerfile
+    command: >
+      sh -c "cd /app && alembic upgrade head"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://enisalimerge:enisalimerge@postgres:5432/enisalimerge
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ── Core services ────────────────────────────────────────────────────────────
+
+  session_manager:
+    build:
+      context: .
+      dockerfile: apps/session_manager/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    environment:
+      <<: *common-env
+      SESSION_MANAGER_PORT: 8002
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health/')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  lm_engine:
+    build:
+      context: .
+      dockerfile: apps/lm_engine/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      <<: *common-env
+      LM_ENGINE_PORT: 8001
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:3b}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health/')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: apps/orchestrator/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *common-env
+      ORCHESTRATOR_PORT: 8000
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-60}
+      HITL_APPROVAL_TIMEOUT: ${HITL_APPROVAL_TIMEOUT:-300}
+      KIO_PORT_MAP: >-
+        {"kio1":8011,"kio2":8012,"kio3":8013,"kio4":8014,"kio5":8015,"kio6":8016,
+         "kio7":8017,"kio8":8018,"kio9":8019,"kio10":8020,"kio11":8021,
+         "kio12":8022,"kio13":8023}
+    depends_on:
+      nats:
+        condition: service_healthy
+      session_manager:
+        condition: service_healthy
+      lm_engine:
+        condition: service_healthy
+
+  # ── KIO shells ───────────────────────────────────────────────────────────────
+
+  kio1:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio1
+    ports: ["8011:8011"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio1
+      KIO_PORT: 8011
+
+  kio2:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio2
+    ports: ["8012:8012"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio2
+      KIO_PORT: 8012
+
+  kio3:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio3
+    ports: ["8013:8013"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio3
+      KIO_PORT: 8013
+      TARGET_REPO_PATH: ${TARGET_REPO_PATH:-/repos/target}
+    volumes:
+      - ${HOST_REPO_PATH:-./examples}:/repos/target:ro
+
+  kio4:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio4
+    ports: ["8014:8014"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio4
+      KIO_PORT: 8014
+
+  kio5:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio5
+    ports: ["8015:8015"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio5
+      KIO_PORT: 8015
+
+  kio6:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio6
+    ports: ["8016:8016"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio6
+      KIO_PORT: 8016
+
+  kio7:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio7
+    ports: ["8017:8017"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio7
+      KIO_PORT: 8017
+    volumes:
+      - ./examples:/examples:ro
+
+  kio8:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio8
+    ports: ["8018:8018"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio8
+      KIO_PORT: 8018
+
+  kio9:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio9
+    ports: ["8019:8019"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio9
+      KIO_PORT: 8019
+
+  kio10:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio10
+    ports: ["8020:8020"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio10
+      KIO_PORT: 8020
+
+  kio11:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio11
+    ports: ["8021:8021"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio11
+      KIO_PORT: 8021
+
+  kio12:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio12
+    ports: ["8022:8022"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio12
+      KIO_PORT: 8022
+
+  kio13:
+    <<: *kio-base
+    build:
+      context: .
+      dockerfile: apps/kio_shells/Dockerfile
+      args:
+        KIO_ID: kio13
+    ports: ["8023:8023"]
+    environment:
+      <<: *common-env
+      KIO_ID: kio13
+      KIO_PORT: 8023
+
+  # ── React Dashboard ──────────────────────────────────────────────────────────
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3001:80"
+    depends_on:
+      - orchestrator
+
+volumes:
+  postgres-data:
+  nats-data:

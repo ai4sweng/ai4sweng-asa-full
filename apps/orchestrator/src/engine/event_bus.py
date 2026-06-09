@@ -1,0 +1,107 @@
+"""In-process SSE event bus — one asyncio.Queue per subscriber."""
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, AsyncGenerator
+
+# Max events buffered per subscriber before back-pressure kicks in.
+_QUEUE_MAXSIZE = 256
+
+# Sentinel pushed into the queue every N seconds so the generator wakes up
+# and FastAPI can detect a disconnected client (via GeneratorExit / CancelledError).
+_HEARTBEAT_INTERVAL = 15  # seconds
+
+
+@dataclass
+class WorkflowEvent:
+    """A single workflow event emitted by the orchestrator."""
+
+    event_type: str
+    session_id: str
+    message: str
+    data: dict[str, Any] | None = None
+    ts: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_sse(self) -> str:
+        """Serialise to Server-Sent Events wire format."""
+        payload = {
+            "event_type": self.event_type,
+            "session_id": self.session_id,
+            "message": self.message,
+            "timestamp": self.ts,
+            **(self.data or {}),
+        }
+        return f"data: {json.dumps(payload)}\n\n"
+
+
+class EventBus:
+    """
+    Broadcast event bus for SSE streaming.
+
+    publish() snapshots the subscriber list before iterating, so
+    concurrent subscribe()/unsubscribe() operations are safe.
+    """
+
+    def __init__(self) -> None:
+        self._queues: list[asyncio.Queue] = []
+        self._lock = asyncio.Lock()
+
+    def publish(self, event: WorkflowEvent) -> None:
+        """Broadcast an event to all current subscribers (snapshot-safe)."""
+        # Take a snapshot so that concurrent subscribe/unsubscribe during
+        # iteration cannot cause RuntimeError or lost-event bugs.
+        for q in list(self._queues):
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                pass  # slow subscriber — drop rather than block the publisher
+
+    async def subscribe(self) -> AsyncGenerator[WorkflowEvent, None]:
+        """Yield events until the client disconnects.
+
+        A heartbeat is sent every ``_HEARTBEAT_INTERVAL`` seconds so that
+        FastAPI's StreamingResponse can detect disconnected browsers promptly
+        rather than holding a zombie queue entry indefinitely.
+        """
+        q: asyncio.Queue[WorkflowEvent | None] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
+
+        async def _heartbeat() -> None:
+            while True:
+                await asyncio.sleep(_HEARTBEAT_INTERVAL)
+                try:
+                    q.put_nowait(None)  # None sentinel = keepalive
+                except asyncio.QueueFull:
+                    pass
+
+        async with self._lock:
+            self._queues.append(q)
+        hb_task = asyncio.create_task(_heartbeat())
+        try:
+            while True:
+                event = await q.get()
+                if event is None:
+                    # Heartbeat — yield a comment line to keep the TCP connection alive.
+                    yield WorkflowEvent("HEARTBEAT", "", "keepalive")
+                else:
+                    yield event
+        finally:
+            hb_task.cancel()
+            async with self._lock:
+                try:
+                    self._queues.remove(q)
+                except ValueError:
+                    pass  # already removed
+
+
+_bus: EventBus | None = None
+
+
+def get_event_bus() -> EventBus:
+    """Return the process-wide EventBus singleton (synchronous — no race risk)."""
+    global _bus
+    if _bus is None:
+        _bus = EventBus()
+    return _bus
