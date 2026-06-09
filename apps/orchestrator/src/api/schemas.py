@@ -67,3 +67,9 @@ class ApproveResponse(BaseModel):
     checkpoint_id: str
     status: str
     message: str
+
+
+class CancelResponse(BaseModel):
+    session_id: str
+    status: str
+    message: str

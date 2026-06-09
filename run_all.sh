@@ -7,6 +7,12 @@ set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BG="${1:-}"
 
+# Use .venv if present (Python 3.12 + all deps), otherwise fall back to system
+VENV="$ROOT/.venv"
+if [[ -x "$VENV/bin/uvicorn" ]]; then
+  export PATH="$VENV/bin:$PATH"
+fi
+
 # shared/ and apps/kio_shells/ must be importable everywhere
 export PYTHONPATH="$ROOT:$ROOT/apps/kio_shells"
 
@@ -15,16 +21,17 @@ run_service() {
   local dir="$2"
   local cmd="$3"
   local port="$4"
+  local extra_env="${5:-}"   # optional VAR=val pairs, space-separated
 
   echo "▶  Starting $name on port $port…"
   if [[ "$BG" == "--bg" ]]; then
     mkdir -p "$ROOT/logs"
-    (cd "$dir" && PYTHONPATH="$PYTHONPATH" eval "$cmd" > "$ROOT/logs/${name}.log" 2>&1) &
+    (cd "$dir" && PYTHONPATH="$PYTHONPATH" PATH="$PATH" eval "$extra_env $cmd" > "$ROOT/logs/${name}.log" 2>&1) &
     echo "   PID $! → logs/${name}.log"
   else
     # macOS: open new Terminal tab
-    osascript -e "tell app \"Terminal\" to do script \"cd '$dir' && export PYTHONPATH='$PYTHONPATH' && $cmd\"" 2>/dev/null || \
-      (cd "$dir" && eval "$cmd" &)
+    osascript -e "tell app \"Terminal\" to do script \"cd '$dir' && export PYTHONPATH='$PYTHONPATH' && export PATH='$PATH' && $extra_env $cmd\"" 2>/dev/null || \
+      (cd "$dir" && eval "$extra_env $cmd" &)
   fi
 }
 
@@ -42,7 +49,8 @@ run_service "orchestrator" "$ROOT/apps/orchestrator" \
 for kio_num in 2 3 4 5 6 7 8 9 10 11 12 13; do
   port=$((8010 + kio_num))
   run_service "kio${kio_num}" "$ROOT/apps/kio_shells/kio${kio_num}" \
-    "uvicorn main:app --host 0.0.0.0 --port $port" $port
+    "uvicorn main:app --host 0.0.0.0 --port $port" $port \
+    "KIO_PORT=$port KIO_ID=kio${kio_num}"
   sleep 0.2
 done
 

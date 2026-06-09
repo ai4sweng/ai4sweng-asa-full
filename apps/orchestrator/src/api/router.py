@@ -22,6 +22,7 @@ from ..services.session_client import get_session_client
 from .schemas import (
     ApproveRequest,
     ApproveResponse,
+    CancelResponse,
     PromptWorkflowRequest,
     RunWorkflowRequest,
     WorkflowStatusResponse,
@@ -135,12 +136,32 @@ async def get_workflow_status(
     _validate_uuid(session_id, "session_id")
     runner = get_runner()
     state = runner.get_state(session_id)
+    client = get_session_client()
+
     if not state:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        # Workflow completed/failed — no longer in active memory. Fall back to DB.
+        db_session = await client.get_session(session_id)
+        if not db_session:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        if db_session.get("owner") and db_session["owner"] != current_user.username:
+            raise HTTPException(status_code=403, detail="Access denied to this session")
+        artifacts = await client.get_artifacts(session_id)
+        return WorkflowStatusResponse(
+            session_id=session_id,
+            workflow_id=db_session.get("workflow_id", session_id),
+            status=db_session.get("status", "UNKNOWN"),
+            progress_current=len(artifacts),
+            progress_total=len(artifacts),
+            active_kio=None,
+            pending_checkpoint_id=None,
+            artifacts=artifacts,
+            log=[],
+        )
+
     # Ownership check: users can only view their own sessions
     if state.get("owner") and state["owner"] != current_user.username:
         raise HTTPException(status_code=403, detail="Access denied to this session")
-    artifacts = await get_session_client().get_artifacts(session_id)
+    artifacts = await client.get_artifacts(session_id)
     return WorkflowStatusResponse(
         session_id=session_id,
         workflow_id=state["workflow_id"],
@@ -182,6 +203,37 @@ async def approve_hitl(session_id: str, req: ApproveRequest,
         checkpoint_id=checkpoint_id,
         status="APPROVED",
         message="Workflow resuming",
+    )
+
+
+@router.post("/{session_id}/cancel", response_model=CancelResponse)
+async def cancel_workflow(
+    session_id: str,
+    current_user: UserInfo = Depends(get_current_user),
+):
+    """Cancel an in-flight workflow session.
+
+    Sets session status to CANCELLED and emits WORKFLOW_CANCELLED SSE.
+    Returns 404 if the session is not found, 409 if already in a terminal state.
+    """
+    _validate_uuid(session_id, "session_id")
+    runner = get_runner()
+    state = runner.get_state(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    if state.get("owner") and state["owner"] != current_user.username:
+        raise HTTPException(status_code=403, detail="Access denied to this session")
+    terminal = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT"}
+    if state.get("status") in terminal:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Session is already in terminal state: {state['status']}",
+        )
+    await runner.cancel(session_id, reason="CANCELLED")
+    return CancelResponse(
+        session_id=session_id,
+        status="CANCELLED",
+        message="Workflow cancelled successfully.",
     )
 
 

@@ -201,11 +201,12 @@ class Repository:
         workflow_id: str,
         artifact_type: str,
         content: dict[str, Any],
+        artifact_id: str | None = None,
         task_id: str | None = None,
         kio_id: str | None = None,
         parent_artifact_id: str | None = None,
     ) -> ArtifactRecord:
-        artifact = ArtifactRecord(
+        kwargs: dict[str, Any] = dict(
             workflow_id=workflow_id,
             task_id=task_id,
             kio_id=kio_id,
@@ -214,6 +215,10 @@ class Repository:
             content=content,
             checksum=self._checksum(content),
         )
+        # 4.4: use caller-supplied UUID as PK so artifact_id == DB PK and FK lineage works
+        if artifact_id:
+            kwargs["id"] = artifact_id
+        artifact = ArtifactRecord(**kwargs)
         self._session.add(artifact)
         await self._session.flush()
         return artifact

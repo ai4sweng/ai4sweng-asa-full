@@ -121,11 +121,11 @@ Last updated: 2026-06-09
 - [x] kio8 — Evidence Report Agent (real: LLM-based)
 - [x] kio9 — Code Generator (real: LLM-based)
 - [x] kio12 — AI Cybersecurity / A2A OWASP (real: LLM-based)
-- [ ] kio2 — Planning Agent (stub handler, needs LLM)
-- [ ] kio3 — Repo Analyzer (placeholder)
-- [ ] kio10 — TinyML / Energy Efficiency (placeholder)
-- [ ] kio11 — AI Test Automation Tool (stub)
-- [ ] kio13 — Developer Training (placeholder)
+- [x] kio2 — Planning Agent (real: LLM selects optimal KIO sequence from description)
+- [x] kio3 — Repo Analyzer (real: LLM-based per-file analysis with RepoContextBuilder)
+- [x] kio10 — TinyML / Energy Efficiency (real: LLM quantisation/pruning recommendations)
+- [x] kio11 — AI Test Automation Tool (real: LLM-based pytest suite generation)
+- [x] kio13 — Developer Training (real: LLM generates modules, exercises, quiz from pipeline artifacts)
 
 ### DevOps & Observability
 - [x] Loguru structured logging across all services
@@ -140,91 +140,64 @@ Last updated: 2026-06-09
 
 ---
 
-### Phase 3 — Task State Machine Completion (No S3, Low Risk)
+### Phase 3 — Task State Machine Completion ✅ COMPLETE (2026-06-09)
 
-**Goal:** Complete Slide 18 states that don't require S3 or breaking changes.
+#### 3.1 — ACKNOWLEDGED State ✅
+- `kio_base._make_nats_handler`: publishes `kio.{id}.status` with `status=ACKNOWLEDGED` before calling handler
+- `orchestrator/main._on_task_status`: handles ACKNOWLEDGED, emits `TASK_ACKNOWLEDGED` SSE
 
-#### 3.1 — ACKNOWLEDGED State
-- **Where:** `kio_base.py` NATS handler (`_make_nats_handler`)
-- **What:** After pulling a message, KIO publishes `kio.{id}.status` with `status=ACKNOWLEDGED` before calling handler
-- **Orchestrator:** Receives via `kio.*.status` subscription, emits `TASK_ACKNOWLEDGED` SSE event
-- **Files:** `kio_base.py`, `main.py` (SSE label already exists)
-- **Risk:** None — additive only
+#### 3.2 — TIMEOUT State ✅
+- `workflow_runner.cancel("TASK_TIMEOUT")`: sets TIMEOUT → WORKFLOW_TIMEOUT SSE → FAILED
+- `timeout_monitor._sweep`: skips TIMEOUT and CANCELLED sessions
 
-#### 3.2 — TIMEOUT State (instead of immediate FAILED)
-- **Where:** `timeout_monitor.py`, `workflow_runner.py`
-- **What:** When deadline exceeded, set status to `TIMEOUT` first, emit `WORKFLOW_TIMEOUT` SSE, then transition to `FAILED`
-- **Files:** `timeout_monitor.py`, `workflow_runner.py`, `event_bus.py`
-- **Risk:** None — changes internal status label only
+#### 3.3 — CANCELLED State + Endpoint ✅
+- `POST /workflow/{session_id}/cancel` added to router
+- `CancelResponse` schema added
+- `workflow_runner.cancel("CANCELLED")`: sets CANCELLED, emits `WORKFLOW_CANCELLED` SSE
 
-#### 3.3 — CANCELLED State + API Endpoint
-- **Where:** `router.py`, `workflow_runner.py`
-- **What:** `DELETE /workflow/{session_id}` endpoint; sets status `CANCELLED`, emits `WORKFLOW_CANCELLED` SSE
-- **Files:** `router.py`, `schemas.py`, `workflow_runner.py`
-- **Risk:** None — new endpoint, additive
+#### 3.4 — RETRYING State + Real Retry ✅
+- `run_kio_node`: retry loop using `RetryManager.should_retry()` + backoff
+- Emits `TASK_RETRYING` SSE with attempt/max_retries counts
+- Resets counter on success, cleans up on completion
 
-#### 3.4 — RETRYING State + Real Retry Mechanism
-- **Where:** `graph_nodes.py`, new `retry_manager.py`
-- **What:** When KIO fails with `retryable=true`, orchestrator waits `backoff_seconds` then retries up to `max_retries` times; emits `TASK_RETRYING` SSE with attempt count
-- **Backoff:** exponential (`2^attempt` seconds, max 60s)
-- **Files:** new `src/engine/retry_manager.py`, `graph_nodes.py`, `graph_state.py`
-- **Risk:** Medium — changes `run_kio_node` exception handling flow
+#### 3.5 — publish_progress in Real KIO Handlers ✅
+- kio4, kio5, kio6, kio7, kio8, kio9, kio12 all call `publish_progress()` at ~10/40/75/90%
 
-#### 3.5 — publish_progress in Real KIO Handlers
-- **Where:** kio4, kio5, kio6, kio7, kio8, kio9, kio12
-- **What:** Call `publish_progress(kio_id, session_id, pct, msg, js)` at meaningful checkpoints during LLM processing
-- **Example stages:** 10% = started, 40% = LLM response received, 80% = processing output, 100% = done
-- **Files:** each KIO's `main.py`
-- **Risk:** None — optional call, doesn't affect result
+#### 3.6 — Retry Manager Module ✅
+- `src/engine/retry_manager.py`: RetryManager with exponential backoff, per-session state
 
-#### 3.6 — Retry Manager Module (Slide 17)
-- **Where:** new `src/engine/retry_manager.py`
-- **What:** Formal module encapsulating retry state per session — current attempt, next retry time, backoff calculator
-- **Depends on:** 3.4
-- **Files:** new `src/engine/retry_manager.py`
-
-#### 3.7 — logs_reference Field (Slide 10)
-- **Where:** `kio_base.py` JOB_RESULT, `graph_nodes.py` artifact registration
-- **What:** Add `"logs_reference": f"logstore://{session_id}/{step_id}"` to task response payload
-- **Note:** No actual log store needed — just a structured reference string for future integration
-- **Files:** `kio_base.py`, `graph_nodes.py`
-- **Risk:** None — additive field
+#### 3.7 — logs_reference Field ✅
+- `kio_base.py` injects `"logs_reference": f"logstore://{session_id}/{step_id}"` into every JOB_RESULT (HTTP + NATS)
 
 ---
 
-### Phase 4 — Provenance Manager + Task Scheduler (No S3, Medium Risk)
+### Phase 4 — Provenance Manager + Task Scheduler ✅ COMPLETE (2026-06-09)
 
-**Goal:** Slide 17 modules that are currently missing as formal components.
+#### 4.1 — Provenance Manager ✅
+- `src/engine/provenance_manager.py`: `get_lineage(session_id, artifact_id)` walks parent chain; `get_full_lineage(session_id)` returns all artifacts in order
+- `src/api/provenance_router.py`: `GET /workflow/{session_id}/artifacts` and `GET /workflow/{session_id}/artifacts/{artifact_id}/lineage`
+- Registered in `orchestrator/main.py`
 
-#### 4.1 — Provenance Manager
-- **Where:** new `src/engine/provenance_manager.py`
-- **What:** Formal query layer for artifact lineage; `GET /artifacts/{artifact_id}/lineage` returns full chain
-- **Current state:** lineage stored in `content.parent_artifact_id` JSON field in PostgreSQL
-- **What to build:** ProvenanceManager class with `get_lineage(artifact_id)` that walks the parent chain via Session Manager API; expose via new router
-- **Files:** new `src/engine/provenance_manager.py`, new `src/api/provenance_router.py`, `main.py`
-- **Risk:** Low — read-only query layer, no schema changes
+#### 4.2 — Task Scheduler ✅
+- `src/engine/task_scheduler.py`: `schedule(kio_sequence, current_step, registry) → kio_id | None`
+- `run_kio_node` calls scheduler instead of inline `kio_seq[step]`
+- Also provides `find_capable_agent(task_type, registry)` for future rerouting
 
-#### 4.2 — Task Scheduler
-- **Where:** new `src/engine/task_scheduler.py`
-- **What:** Formal module that decides which KIO to dispatch next; currently graph_nodes.py does this inline
-- **Interface:** `schedule(kio_sequence, current_step, agent_registry) → kio_id | None`
-- **Adds:** capability-based routing (schedule to alive agent only, skip stale ones)
-- **Files:** new `src/engine/task_scheduler.py`, updated `graph_nodes.py`
-- **Risk:** Medium — changes dispatch decision path in run_kio_node
+#### 4.3 — Capability-Based Task Matching ✅
+- Scheduler checks `is_alive(kio_id)` and `supported_tasks` match
+- Emits `TASK_NO_CAPABLE_AGENT` SSE; raises RuntimeError (feeds RetryManager)
+- Safe fallback: if registry is empty (HTTP mode / NATS not yet connected), skips check
 
-#### 4.3 — Capability-Based Task Matching
-- **Where:** `task_scheduler.py` (from 4.2)
-- **What:** Match task_type from kio_sequence against `supported_tasks` in AgentRegistry; reject if no capable agent alive
-- **Emits:** `TASK_NO_CAPABLE_AGENT` SSE event if no match found
-- **Files:** `task_scheduler.py`, `agent_registry.py`
-- **Risk:** Medium — could block dispatches if agent not yet registered
-
-#### 4.4 — Unify KIO-Generated Artifact IDs with DB PKs
-- **Current problem:** KIO generates its own `artifact_id` UUID; Session Manager DB uses auto-generated PKs; `parent_artifact_id` FK cannot reference KIO UUIDs
-- **Fix:** Session Manager `create_artifact` accepts caller-supplied UUID as primary key
-- **Migration:** DB migration to allow UUID primary keys on artifacts table
-- **Files:** Session Manager ORM model, migration script, `session_service.py`
-- **Risk:** High (schema migration on existing data) — do in maintenance window
+#### 4.4 — ID Unification ✅ (no migration needed)
+- `repositories.create_artifact`: accepts optional `artifact_id` param used as DB PK
+- `session_service.register_artifact`: passes KIO artifact_id as DB PK
+- `session_service.get_artifacts`: returns `parent_artifact_id` from ORM FK column + `created_at`
+- `session_service.get_artifact(artifact_id)`: new single-artifact lookup
+- `session_service._to_session_dict`: handles TIMEOUT, CANCELLED, BLOCKED states
+- `session_service.update_status`: maps TIMEOUT, CANCELLED, BLOCKED to WorkflowState
+- `constants.WorkflowState`: added TIMEOUT and CANCELLED values
+- Session Manager router: new `GET /sessions/{session_id}/artifacts/{artifact_id}` endpoint
+- No DB migration needed — existing auto-generated PKs untouched; new rows use KIO UUIDs
 
 ---
 
@@ -299,46 +272,40 @@ Last updated: 2026-06-09
 
 ---
 
-### Phase 7 — Remaining KIO Implementations
+### Phase 7 — Remaining KIO Implementations ✅ COMPLETE (2026-06-10)
 
-**Goal:** Replace stub/placeholder handlers with real LLM-backed logic.
-
-| KIO | Title | Status | Notes |
-|-----|-------|--------|-------|
-| kio2 | Planning Agent | stub | Should use LLM to produce structured workflow plan from description |
-| kio3 | Repo Analyzer | placeholder | Clone + analyse Git repo; extract structure, dependencies |
-| kio10 | TinyML / Energy Efficiency | placeholder | Energy profiling + model optimization recommendations |
-| kio11 | AI Test Automation | stub | Generate and run test suites via LLM |
-| kio13 | Developer Training | placeholder | Produce training material / explanations from artifacts |
-
-Each requires:
-1. Real LLM prompt engineering with system prompt
-2. Input validation from envelope payload
-3. Structured output parsing
-4. `publish_progress()` calls at meaningful checkpoints
-5. Proper `artifact_data` schema documented in `supported_tasks`
+| KIO | Title | Status |
+|-----|-------|--------|
+| kio2 | Planning Agent | ✅ LLM selects optimal pipeline; returns `kio_sequence` + `hitl_after` |
+| kio3 | Repo Analyzer | ✅ RepoContextBuilder + per-file LLM analysis; Ollama→Anthropic fallback |
+| kio10 | TinyML / Energy Efficiency | ✅ LLM quantisation/pruning/distillation recommendations |
+| kio11 | AI Test Automation | ✅ LLM pytest suite + conftest + hypothesis generation |
+| kio13 | Developer Training | ✅ LLM modules, exercises, quiz from upstream pipeline artifacts |
 
 ---
 
-### Phase 8 — GitHub Repository & CI/CD
+### Phase 8 — GitHub Repository & CI/CD ✅ COMPLETE (2026-06-10)
 
-**Goal:** Source control + automated build pipeline.
+#### 8.1 — Git Init & Remote ✅
+- Repo already on `https://github.com/ai4sweng/ai4sweng-asa-full`
+- `.gitignore` updated: covers `.env`, logs/, `__pycache__`, `.venv/`, volumes
 
-#### 8.1 — Git Init & Remote
-- `git init` in `/Users/aliatalay/EnisAliMerge`
-- Remote: `https://github.com/ai4sweng/ai4sweng-asa-full`
-- Requires GitHub Personal Access Token (not yet provided)
-- `.gitignore` already exists (verify it excludes `.env`, `__pycache__`, volumes)
+#### 8.2 — GitHub Actions CI ✅ `.github/workflows/ci.yml`
+- **lint**: `ruff check` + `ruff format --check` on push/PR
+- **typecheck**: `mypy` on shared/ and orchestrator/src/ (advisory, continue-on-error)
+- **test**: DB migrations + `pytest tests/` with postgres + nats service containers
+- **build**: `docker build` smoke test for orchestrator, session_manager, lm_engine, kio_shells (matrix)
+- Concurrency group cancels in-progress runs on new push
 
-#### 8.2 — GitHub Actions CI
-- **Lint:** ruff + mypy on push
-- **Build:** `docker compose build` on PR
-- **Test:** `pytest apps/*/tests/` (tests not yet written — see Phase 9)
-- **Files:** `.github/workflows/ci.yml`
+#### 8.3 — Release Workflow ✅ `.github/workflows/release.yml`
+- Triggers on `v*.*.*` tags
+- Builds and pushes all 15 images (3 core + 13 KIOs) to `ghcr.io/ai4sweng/<name>:<version>`
+- Multi-arch: `linux/amd64` + `linux/arm64`
+- GHA layer cache (`type=gha`) shared across builds
+- Creates GitHub Release with auto-generated changelog from git log
 
-#### 8.3 — Release Workflow
-- Semantic versioning tags trigger image push to GHCR
-- KIO images tagged `ghcr.io/ai4sweng/{kio_id}:{version}`
+#### 8.4 — Dependabot ✅ `.github/dependabot.yml`
+- Weekly updates for: GitHub Actions, shared pip, orchestrator pip, session_manager pip, kio_shells pip, dashboard npm
 
 ---
 
@@ -371,15 +338,15 @@ Each requires:
 |-------|-------|--------|
 | 7 | Message Envelope | ✅ Complete (flattened, project_id added) |
 | 8 | Task Request Body | ⚠️ Partial (retry_policy sent, timeout_seconds used; task_id/priority/arrays missing) |
-| 9 | Task Status Messages | ⚠️ Partial (publish_progress exists; KIOs don't call it) |
-| 10 | Task Response (Success) | ⚠️ Partial (execution_time_ms done; S3 location/checksum missing) |
+| 9 | Task Status Messages | ✅ Complete (publish_progress wired into kio4/5/6/7/8/9/12; ACKNOWLEDGED via NATS) |
+| 10 | Task Response (Success) | ⚠️ Partial (execution_time_ms + logs_reference done; S3 location/checksum missing) |
 | 11 | Task Response (Failure) | ✅ Complete |
 | 12 | Capability Registration | ✅ Complete |
 | 13 | Agent API Interface | ⚠️ Partial (publishTaskStatus not wired in handlers) |
 | 14 | Orchestrator API Interface | ✅ Complete (informal interface) |
 | 16 | Orchestrator State Machine | ✅ Complete |
-| 17 | Orchestrator Internal Modules | ⚠️ Partial (Task Scheduler, Provenance Mgr, Retry Mgr, Compensation Engine missing) |
-| 18 | Task State Machine | ⚠️ Partial (ACKNOWLEDGED, RETRYING, TIMEOUT state, CANCELLED, COMPENSATING missing) |
+| 17 | Orchestrator Internal Modules | ⚠️ Partial (RetryManager ✅ Task Scheduler ✅ Provenance Mgr ✅; Compensation Engine missing) |
+| 18 | Task State Machine | ⚠️ Partial (ACKNOWLEDGED ✅ RETRYING ✅ TIMEOUT ✅ CANCELLED ✅; COMPENSATING missing) |
 | 19 | Workflow Transitions | ✅ Complete |
 
 ---

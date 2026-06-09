@@ -1,9 +1,41 @@
+# Secrets & local config
 .env
+.env.*
+!.env.example
+
+# Python
 *.pyc
+*.pyo
 __pycache__/
-.venv/
-dist/
 *.egg-info/
-node_modules/
-.DS_Store
+dist/
+build/
+.venv/
+.mypy_cache/
+.ruff_cache/
 .pytest_cache/
+coverage.xml
+.coverage
+htmlcov/
+
+# Node / Dashboard
+node_modules/
+apps/dashboard/dist/
+apps/dashboard/.next/
+
+# Runtime / local dev
+logs/
+*.log
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker volumes (if mounted locally)
+postgres-data/
+nats-data/

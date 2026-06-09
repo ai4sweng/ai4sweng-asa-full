@@ -61,12 +61,15 @@ class SessionService:
         status: str,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """Transition the session to a new status (ACTIVE, COMPLETED, FAILED, PENDING_REVIEW)."""
+        """Transition the session to a new status."""
         state_map = {
             "ACTIVE": WorkflowState.RUNNING,
             "COMPLETED": WorkflowState.COMPLETED,
             "FAILED": WorkflowState.FAILED,
+            "TIMEOUT": WorkflowState.TIMEOUT,
+            "CANCELLED": WorkflowState.CANCELLED,
             "PENDING_REVIEW": WorkflowState.WAITING_FOR_HUMAN_APPROVAL,
+            "BLOCKED": WorkflowState.BLOCKED,
         }
         wf_state = state_map.get(status, WorkflowState.RUNNING)
         async with self._sp.session_scope() as repo:
@@ -119,19 +122,19 @@ class SessionService:
             "data": artifact_data,
             "stage": workflow_stage,
             "state": state,
-            "artifact_id": artifact_id,          # preserve KIO-generated ID
-            "parent_artifact_id": parent_artifact_id,  # provenance lineage
         }
         async with self._sp.session_scope() as repo:
+            # 4.4: pass KIO artifact_id as the DB PK so FK lineage works
             artifact = await repo.create_artifact(
                 workflow_id=session_id,
                 artifact_type=artifact_type,
                 content=content,
+                artifact_id=artifact_id,
                 kio_id=producer_kio,
-                # FK parent_artifact_id intentionally omitted — KIO IDs ≠ DB PKs yet
+                parent_artifact_id=parent_artifact_id,
             )
         return {
-            "artifact_id": artifact_id,
+            "artifact_id": artifact.id,
             "session_id": session_id,
             "producer_kio": producer_kio,
             "artifact_type": artifact_type,
@@ -152,9 +155,29 @@ class SessionService:
                 "artifact_type": a.artifact_type,
                 "artifact_data": (a.content or {}).get("data", {}),
                 "state": (a.content or {}).get("state", "CREATED"),
+                # 4.4: parent_artifact_id now stored in ORM FK column
+                "parent_artifact_id": a.parent_artifact_id,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
             }
             for a in artifacts
         ]
+
+    async def get_artifact(self, artifact_id: str) -> dict[str, Any] | None:
+        """Fetch a single artifact by its ID (DB PK == KIO artifact_id after 4.4)."""
+        async with self._sp.read_scope() as repo:
+            a = await repo.get_artifact(artifact_id)
+        if not a:
+            return None
+        return {
+            "artifact_id": a.id,
+            "session_id": a.workflow_id,
+            "producer_kio": a.kio_id or "",
+            "artifact_type": a.artifact_type,
+            "artifact_data": (a.content or {}).get("data", {}),
+            "state": (a.content or {}).get("state", "CREATED"),
+            "parent_artifact_id": a.parent_artifact_id,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
 
     # ------------------------------------------------------------------
     # HITL checkpoints
@@ -277,8 +300,12 @@ class SessionService:
         state_map = {
             "RUNNING": "ACTIVE",
             "WAITING_FOR_HUMAN": "PENDING_REVIEW",
+            "WAITING_FOR_HUMAN_APPROVAL": "PENDING_REVIEW",
             "COMPLETED": "COMPLETED",
             "FAILED": "FAILED",
+            "TIMEOUT": "TIMEOUT",
+            "CANCELLED": "CANCELLED",
+            "BLOCKED": "BLOCKED",
             "CREATED": "ACTIVE",
         }
         return {

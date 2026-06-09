@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 import uvicorn
 from loguru import logger
 
-from kio_base import MessageEnvelope, make_kio_app
+from kio_base import MessageEnvelope, make_kio_app, publish_progress
 from shared.llm.factory import create_llm_provider
 from shared.config import get_settings
 
@@ -84,6 +84,16 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
     logger.info("[kio8] Building evidence report. Tests: {}/{} passed", passed, total)
 
+    _js = None
+    try:
+        from shared.messaging.jetstream import get_jetstream
+        _js = await get_jetstream()
+    except Exception:
+        pass
+
+    await publish_progress(KIO_ID, envelope.session_id, 10,
+                           "Compiling pipeline evidence…", _js)
+
     report: dict = {}
 
     try:
@@ -105,7 +115,10 @@ async def handler(envelope: MessageEnvelope) -> dict:
             "Generate the evidence report."
         )
 
+        await publish_progress(KIO_ID, envelope.session_id, 45,
+                               "Generating evidence report with LLM…", _js)
         response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
+        await publish_progress(KIO_ID, envelope.session_id, 80, "Parsing report…", _js)
         report = json.loads(_strip_fences(response.content))
 
     except Exception as exc:

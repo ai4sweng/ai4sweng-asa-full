@@ -73,7 +73,22 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
         workflow_id = state["workflow_id"]
         step = state["current_step"]
         kio_seq = state["kio_sequence"]
-        kio_id = kio_seq[step]
+
+        # 4.2 / 4.3: TaskScheduler decides which KIO to dispatch (capability check)
+        from .task_scheduler import get_task_scheduler
+        from .agent_registry import get_agent_registry
+        scheduler = get_task_scheduler()
+        registry = get_agent_registry()
+        kio_id = scheduler.schedule(kio_seq, step, registry)
+        if kio_id is None:
+            target_kio = kio_seq[step] if step < len(kio_seq) else "unknown"
+            _emit("TASK_NO_CAPABLE_AGENT", session_id,
+                  f"No capable agent available for {target_kio.upper()} (step {step + 1})",
+                  {"kio": target_kio, "step": step + 1, "status": "NO_CAPABLE_AGENT"})
+            raise RuntimeError(
+                f"No capable agent for step {step + 1} ({target_kio}): "
+                "agent stale or capability mismatch — will retry if configured"
+            )
 
         _emit("KIO_STARTED", session_id,
               f"Initiating {kio_id.upper()}… ({step + 1}/{len(kio_seq)})",
@@ -100,54 +115,86 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
               f"[{kio_id.upper()}] Dispatching job… (step {step + 1}/{len(kio_seq)})",
               {"kio": kio_id, "step": step + 1, "step_id": step_id, "correlation_id": correlation_id})
 
+        retry_policy = {"max_retries": 1, "backoff_strategy": "exponential"}
+        from .retry_manager import get_retry_manager
+        rm = get_retry_manager()
+        rm.register(session_id, retry_policy)
+
         _t0 = time.monotonic()
-        try:
-            result = await kio.execute(
-                kio_id=kio_id,
-                session_id=session_id,
-                workflow_id=workflow_id,
-                payload={
-                    "description": state["description"],
-                    "working_directory": state["working_directory"],
-                    "feedback": state.get("feedback", ""),
-                    "last_artifact": last_artifact,
-                    "initial_context": state.get("initial_context", {}),
-                    "llm_provider_override": state.get("llm_provider_override", ""),
-                    "retry_policy": {"max_retries": 1, "backoff_strategy": "exponential"},
-                    "timeout_seconds": state.get("timeout_seconds"),  # per-task (Slide 8)
-                },
-                correlation_id=correlation_id,
-                step_id=step_id,
-            )
-        except Exception as exc:
-            cfg = get_settings()
-            already_retried = bool(state.get("llm_provider_override"))
-            if cfg.llm_provider_fallback and not already_retried:
-                logger.warning(
-                    "[{}] {} failed with primary LLM ({}); offering HITL fallback to {}",
-                    session_id[:8], kio_id, exc, cfg.llm_provider_fallback,
-                )
-                _emit("KIO_FAILED", session_id,
-                      f"[{kio_id.upper()}] failed — offering switch to {cfg.llm_provider_fallback}",
-                      {"kio": kio_id, "error": str(exc)})
-                return {
-                    "last_result": {
-                        "payload": {
-                            "status": "REVIEW_REQUIRED",
-                            "message": str(exc),
-                            "artifact_data": {},
-                            "hitl_question": (
-                                f"{kio_id.upper()} failed with {cfg.llm_provider!r}. "
-                                f"Approve retry with {cfg.llm_provider_fallback!r}?"
-                            ),
-                        }
+        result = None
+        while True:
+            try:
+                result = await kio.execute(
+                    kio_id=kio_id,
+                    session_id=session_id,
+                    workflow_id=workflow_id,
+                    payload={
+                        "description": state["description"],
+                        "working_directory": state["working_directory"],
+                        "feedback": state.get("feedback", ""),
+                        "last_artifact": last_artifact,
+                        "initial_context": state.get("initial_context", {}),
+                        "llm_provider_override": state.get("llm_provider_override", ""),
+                        "retry_policy": retry_policy,
+                        "timeout_seconds": state.get("timeout_seconds"),  # per-task (Slide 8)
+                        "step_id": step_id,
                     },
-                    "error": str(exc),
-                    "llm_retry_pending": True,
-                    "artifacts": [],
-                    "feedback": "",
-                }
-            raise
+                    correlation_id=correlation_id,
+                    step_id=step_id,
+                )
+                rm.reset(session_id)  # success — reset retry counter for next step
+                break  # exit retry loop on success
+            except Exception as exc:
+                cfg = get_settings()
+
+                # Check if the error payload says retryable=true
+                retryable = getattr(exc, "retryable", False)
+                # Also check if it's a plain exception we should retry (not HITL path)
+                already_retried = bool(state.get("llm_provider_override"))
+
+                if rm.should_retry(session_id) and not already_retried:
+                    attempt = await rm.wait_and_increment(session_id)
+                    if session_id in active:
+                        active[session_id]["status"] = "RETRYING"
+                    _emit("TASK_RETRYING", session_id,
+                          f"[{kio_id.upper()}] Retrying (attempt {attempt}/{retry_policy['max_retries']})…",
+                          {"kio": kio_id, "attempt": attempt,
+                           "max_retries": retry_policy["max_retries"], "error": str(exc)})
+                    logger.warning(
+                        "[{}] {} failed (attempt {}), retrying: {}",
+                        session_id[:8], kio_id, attempt, exc,
+                    )
+                    if session_id in active:
+                        active[session_id]["status"] = "RUNNING"
+                    continue  # retry
+
+                # No more retries — offer HITL fallback if configured
+                if cfg.llm_provider_fallback and not already_retried:
+                    logger.warning(
+                        "[{}] {} failed with primary LLM ({}); offering HITL fallback to {}",
+                        session_id[:8], kio_id, exc, cfg.llm_provider_fallback,
+                    )
+                    _emit("KIO_FAILED", session_id,
+                          f"[{kio_id.upper()}] failed — offering switch to {cfg.llm_provider_fallback}",
+                          {"kio": kio_id, "error": str(exc)})
+                    return {
+                        "last_result": {
+                            "payload": {
+                                "status": "REVIEW_REQUIRED",
+                                "message": str(exc),
+                                "artifact_data": {},
+                                "hitl_question": (
+                                    f"{kio_id.upper()} failed with {cfg.llm_provider!r}. "
+                                    f"Approve retry with {cfg.llm_provider_fallback!r}?"
+                                ),
+                            }
+                        },
+                        "error": str(exc),
+                        "llm_retry_pending": True,
+                        "artifacts": [],
+                        "feedback": "",
+                    }
+                raise
 
         # Job returned — back to ACTIVE while we register the artifact
         execution_time_ms = int((time.monotonic() - _t0) * 1000)
@@ -330,6 +377,9 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
             get_orchestrator_sm().workflow_finished()
         except Exception:
             pass
+        # Clean up retry state for this session
+        from .retry_manager import get_retry_manager
+        get_retry_manager().cleanup(session_id)
         # Release in-process state after completion; durable state lives in PostgreSQL.
         active.pop(session_id, None)
         return {"status": "COMPLETED"}

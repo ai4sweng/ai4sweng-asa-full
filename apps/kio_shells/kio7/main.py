@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 import uvicorn
 from loguru import logger
 
-from kio_base import MessageEnvelope, make_kio_app
+from kio_base import MessageEnvelope, make_kio_app, publish_progress
 from shared.llm.factory import create_llm_provider
 from shared.config import get_settings
 
@@ -304,6 +304,16 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
     logger.info("[kio7] {} patch(es), {} test file(s)", len(patches), len(test_files))
 
+    _js = None
+    try:
+        from shared.messaging.jetstream import get_jetstream
+        _js = await get_jetstream()
+    except Exception:
+        pass
+
+    await publish_progress(KIO_ID, envelope.session_id, 10,
+                           f"Preparing workspace for {len(patches)} patch(es)…", _js)
+
     repo_path = _resolve_repo(working_directory)
     if not repo_path:
         logger.warning("[kio7] No repo found — skipping pytest")
@@ -383,6 +393,8 @@ async def handler(envelope: MessageEnvelope) -> dict:
                     shutil.copy2(str(py_file), dest)
             _apply_database_shim(tmpdir)
 
+        await publish_progress(KIO_ID, envelope.session_id, 50,
+                               "Running pytest suite…", _js)
         # 8. Full pytest run
         try:
             pytest_summary = await loop.run_in_executor(None, lambda: _run_pytest(tmpdir))
@@ -398,6 +410,8 @@ async def handler(envelope: MessageEnvelope) -> dict:
     failed = pytest_summary.get("failed", 0)
     total = pytest_summary.get("total", 0)
     logger.info("[kio7] Results: {}/{} passed", passed, total)
+    await publish_progress(KIO_ID, envelope.session_id, 75,
+                           f"Pytest done: {passed}/{total} passed — interpreting results…", _js)
 
     # 5. LLM interpretation
     try:

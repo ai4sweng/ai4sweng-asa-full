@@ -69,19 +69,34 @@ async def lifespan(app: FastAPI):
                     logger.warning("Capability announcement parse error: {}", exc)
 
             async def _on_task_status(msg):
-                """Receive intermediate TASK_STATUS from KIOs and re-emit as SSE."""
+                """Receive intermediate TASK_STATUS from KIOs and re-emit as SSE.
+
+                Handles two sub-types:
+                  ACKNOWLEDGED — KIO confirmed receipt (Slide 18 state)
+                  RUNNING      — intermediate progress update (Slide 9)
+                """
                 try:
                     data = _json.loads(msg.data.decode())
                     session_id = data.get("task_id", "")
                     kio_id = data.get("agent_id", "")
                     progress = data.get("progress", 0)
                     message = data.get("message", "")
-                    bus.publish(WorkflowEvent(
-                        "TASK_PROGRESS",
-                        session_id,
-                        f"[{kio_id.upper()}] {message} ({progress}%)",
-                        {"kio": kio_id, "progress_pct": progress, "message": message},
-                    ))
+                    status = data.get("status", "RUNNING")
+
+                    if status == "ACKNOWLEDGED":
+                        bus.publish(WorkflowEvent(
+                            "TASK_ACKNOWLEDGED",
+                            session_id,
+                            f"[{kio_id.upper()}] Job acknowledged",
+                            {"kio": kio_id, "status": "ACKNOWLEDGED"},
+                        ))
+                    else:
+                        bus.publish(WorkflowEvent(
+                            "TASK_PROGRESS",
+                            session_id,
+                            f"[{kio_id.upper()}] {message} ({progress}%)",
+                            {"kio": kio_id, "progress_pct": progress, "message": message},
+                        ))
                 except Exception as exc:
                     logger.debug("Task status parse error: {}", exc)
 
@@ -174,12 +189,14 @@ async def orchestrator_status():
     return get_orchestrator_sm().summary()
 
 
-from src.api.router import router as workflow_router          # noqa: E402
-from src.api.auth_router import router as auth_router        # noqa: E402
-from src.api.mcp_router import router as mcp_router          # noqa: E402
+from src.api.router import router as workflow_router                    # noqa: E402
+from src.api.auth_router import router as auth_router                  # noqa: E402
+from src.api.mcp_router import router as mcp_router                    # noqa: E402
+from src.api.provenance_router import router as provenance_router      # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(workflow_router)
+app.include_router(provenance_router)
 app.include_router(mcp_router)
 
 

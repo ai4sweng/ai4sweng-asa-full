@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 import uvicorn
 from loguru import logger
 
-from kio_base import MessageEnvelope, make_kio_app
+from kio_base import MessageEnvelope, make_kio_app, publish_progress
 from shared.llm.factory import create_llm_provider
 from shared.config import get_settings
 
@@ -125,6 +125,17 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
     logger.info("[kio4] Generating tests for {} finding(s)", len(findings))
 
+    # Resolve NATS JS for publish_progress (None = HTTP mode, progress still logged)
+    _js = None
+    try:
+        from shared.messaging.jetstream import get_jetstream
+        _js = await get_jetstream()
+    except Exception:
+        pass
+
+    await publish_progress(KIO_ID, envelope.session_id, 10,
+                           f"Preparing test generation for {len(findings)} finding(s)", _js)
+
     files = []
     summary = f"Test generation for {len(findings)} finding(s)"
 
@@ -138,7 +149,11 @@ async def handler(envelope: MessageEnvelope) -> dict:
             "Generate pytest test files using the ### heading + code block format."
         )
 
+        await publish_progress(KIO_ID, envelope.session_id, 40,
+                               "Sending prompt to LLM…", _js)
         response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
+        await publish_progress(KIO_ID, envelope.session_id, 70,
+                               "Parsing generated test files…", _js)
         files = _parse_code_files(response.content)
 
         if not files:
@@ -157,6 +172,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
         )
         summary = f"Generated {len(files)} test file(s) with ~{test_count} test(s)"
         logger.info("[kio4] {}", summary)
+        await publish_progress(KIO_ID, envelope.session_id, 90, summary, _js)
 
     except Exception as exc:
         logger.exception("[kio4] LLM test generation failed: {}", exc)

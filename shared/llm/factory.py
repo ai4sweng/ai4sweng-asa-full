@@ -46,14 +46,15 @@ async def create_llm_provider(
         try:
             await inner.health_check()  # type: ignore[attr-defined]
         except OllamaUnavailableError as exc:
+            fallback = (override or cfg.llm_provider_fallback or "").strip().lower()
+            if fallback and fallback != "ollama":
+                logger.warning(
+                    "Ollama unavailable — falling back to %s (%s)", fallback, exc
+                )
+                return await create_llm_provider(
+                    observability, settings=cfg, override=fallback
+                )
             logger.error("%s", exc)
-            print(
-                "\nOllama is not available.\n"
-                f"{exc}\n\n"
-                "To use the mock provider instead, unset LLM_PROVIDER or run:\n"
-                "  LLM_PROVIDER=mock python -m kio1_orchestrator\n",
-                file=sys.stderr,
-            )
             raise SystemExit(1) from exc
         logger.info("Using Ollama model=%s base_url=%s", cfg.ollama_model, cfg.ollama_base_url)
 

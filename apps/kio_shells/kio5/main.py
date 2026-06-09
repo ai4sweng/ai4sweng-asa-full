@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 import uvicorn
 from loguru import logger
 
-from kio_base import MessageEnvelope, make_kio_app
+from kio_base import MessageEnvelope, make_kio_app, publish_progress
 from shared.llm.factory import create_llm_provider
 from shared.config import get_settings
 
@@ -96,12 +96,23 @@ async def handler(envelope: MessageEnvelope) -> dict:
     else:
         logger.warning("[kio5] No findings and no code — running with empty input")
 
+    _js = None
+    try:
+        from shared.messaging.jetstream import get_jetstream
+        _js = await get_jetstream()
+    except Exception:
+        pass
+
+    await publish_progress(KIO_ID, envelope.session_id, 10, "Bug detection starting…", _js)
+
     bugs = []
     summary = ""
 
     try:
         llm_override = payload.get("llm_provider_override", "")
         provider = await _get_provider(llm_override)
+
+        await publish_progress(KIO_ID, envelope.session_id, 35, "Sending code to LLM for analysis…", _js)
 
         if raw_code and not findings:
             # Direct mode: full bug detection on the provided code snippet
@@ -120,6 +131,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
             )
 
         response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
+        await publish_progress(KIO_ID, envelope.session_id, 65, "Parsing LLM response…", _js)
         result = json.loads(_strip_fences(response.content))
         if not isinstance(result, dict):
             raise ValueError(f"LLM returned non-object JSON: {type(result).__name__}")
@@ -135,6 +147,9 @@ async def handler(envelope: MessageEnvelope) -> dict:
         logger.exception("[kio5] LLM bug detection failed: {}", exc)
         summary = f"Bug detection encountered an error: {exc}"
         bugs = []
+
+    await publish_progress(KIO_ID, envelope.session_id, 75,
+                           f"{len(bugs)} bug(s) confirmed — running OWASP scan…", _js)
 
     # ── A2A: call kio12 for OWASP scan on the same code ──────────────────────
     owasp_vulns: list = []
@@ -169,6 +184,9 @@ async def handler(envelope: MessageEnvelope) -> dict:
             logger.error("[kio5] A2A kio12 call FAILED ({}); OWASP data unavailable — "
                          "reviewer should be aware", exc)
     # ─────────────────────────────────────────────────────────────────────────
+
+    await publish_progress(KIO_ID, envelope.session_id, 90,
+                           "Composing bug report…", _js)
 
     bug_count = len(bugs)
     criticals = sum(1 for b in bugs if b.get("severity") == "CRITICAL")

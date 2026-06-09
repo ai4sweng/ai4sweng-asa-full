@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 import uvicorn
 from loguru import logger
 
-from kio_base import MessageEnvelope, make_kio_app
+from kio_base import MessageEnvelope, make_kio_app, publish_progress
 from shared.llm.factory import create_llm_provider
 from shared.tools.repo_context_builder import RepoContextBuilder
 from shared.config import get_settings
@@ -95,6 +95,16 @@ async def handler(envelope: MessageEnvelope) -> dict:
     # A2A callers (e.g. kio5) may pass inline code instead of a repo path
     inline_code = payload.get("code", "")
 
+    _js = None
+    try:
+        from shared.messaging.jetstream import get_jetstream
+        _js = await get_jetstream()
+    except Exception:
+        pass
+
+    await publish_progress(KIO_ID, envelope.session_id, 10,
+                           "Starting OWASP security audit…", _js)
+
     try:
         llm_override = payload.get("llm_provider_override", "")
         provider = await _get_provider(llm_override)
@@ -105,13 +115,20 @@ async def handler(envelope: MessageEnvelope) -> dict:
         else:
             repo_context = await _build_repo_context(repo_path)
 
+        await publish_progress(KIO_ID, envelope.session_id, 35,
+                               "Scanning source for OWASP Top 10 vulnerabilities…", _js)
+
         user_prompt = (
             f"Security objective: {description}\n\n"
             f"Source code to audit and harden:\n{repo_context or '(no repository provided)'}\n\n"
             "Identify all vulnerabilities and generate hardened replacement files as JSON."
         )
 
+        await publish_progress(KIO_ID, envelope.session_id, 55,
+                               "Generating hardened code with LLM…", _js)
         response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
+        await publish_progress(KIO_ID, envelope.session_id, 85,
+                               "Parsing vulnerability report…", _js)
         raw = _strip_fences(response.content)
 
         try:

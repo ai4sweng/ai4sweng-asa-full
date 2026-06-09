@@ -45,6 +45,7 @@ class ArtifactResponse(BaseModel):
     artifact_data: dict[str, Any]
     state: str
     parent_artifact_id: str | None = None
+    created_at: str | None = None
 
 
 class CreateCheckpointRequest(BaseModel):

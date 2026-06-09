@@ -57,7 +57,7 @@ class TimeoutMonitor:
             deadline = state.get("deadline")
             if not deadline:
                 continue
-            if state.get("status") in ("COMPLETED", "FAILED", "PENDING_REVIEW", "BLOCKED"):
+            if state.get("status") in ("COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "PENDING_REVIEW", "BLOCKED"):
                 continue
             try:
                 dl = datetime.fromisoformat(deadline) if isinstance(deadline, str) else deadline

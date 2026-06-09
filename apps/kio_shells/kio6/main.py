@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 import uvicorn
 from loguru import logger
 
-from kio_base import MessageEnvelope, make_kio_app
+from kio_base import MessageEnvelope, make_kio_app, publish_progress
 from shared.llm.factory import create_llm_provider
 from shared.tools.repo_context_builder import RepoContextBuilder
 from shared.config import get_settings
@@ -134,6 +134,16 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
     logger.info("[kio6] Patching {} confirmed bug(s). Feedback: '{}'", len(bugs), feedback[:80])
 
+    _js = None
+    try:
+        from shared.messaging.jetstream import get_jetstream
+        _js = await get_jetstream()
+    except Exception:
+        pass
+
+    await publish_progress(KIO_ID, envelope.session_id, 10,
+                           f"Reading source files for {len(bugs)} bug(s)…", _js)
+
     patches = []
     summary = ""
 
@@ -152,7 +162,10 @@ async def handler(envelope: MessageEnvelope) -> dict:
             "Generate corrected files using the ### heading + code block format."
         )
 
+        await publish_progress(KIO_ID, envelope.session_id, 40,
+                               "Sending bugs + source to LLM for patch generation…", _js)
         response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
+        await publish_progress(KIO_ID, envelope.session_id, 75, "Parsing patches…", _js)
         patches = _parse_code_files(response.content)
 
         if not patches:

@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 import uvicorn
 from loguru import logger
 
-from kio_base import MessageEnvelope, make_kio_app
+from kio_base import MessageEnvelope, make_kio_app, publish_progress
 from shared.llm.factory import create_llm_provider
 from shared.config import get_settings
 
@@ -72,6 +72,15 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
     logger.info("[kio9] Generating code for: {}", user_prompt_text[:120])
 
+    _js = None
+    try:
+        from shared.messaging.jetstream import get_jetstream
+        _js = await get_jetstream()
+    except Exception:
+        pass
+
+    await publish_progress(KIO_ID, envelope.session_id, 10, "Starting code generation…", _js)
+
     generated_code = ""
     language = "python"
     error = None
@@ -79,7 +88,11 @@ async def handler(envelope: MessageEnvelope) -> dict:
     try:
         llm_override = payload.get("llm_provider_override", "")
         provider = await _get_provider(llm_override)
+        await publish_progress(KIO_ID, envelope.session_id, 40,
+                               "Sending prompt to LLM…", _js)
         response = await provider.complete(user_prompt_text, system=SYSTEM_PROMPT)
+        await publish_progress(KIO_ID, envelope.session_id, 80,
+                               "Processing generated code…", _js)
         generated_code = response.content.strip()
         # Strip accidental markdown fences if the model added them
         if generated_code.startswith("```"):

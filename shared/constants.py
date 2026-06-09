@@ -92,6 +92,8 @@ class WorkflowState(StrEnum):
     BLOCKED = "BLOCKED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    TIMEOUT = "TIMEOUT"
+    CANCELLED = "CANCELLED"
 
 
 # ---------------------------------------------------------------------------

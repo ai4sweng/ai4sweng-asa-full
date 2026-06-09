@@ -247,6 +247,12 @@ def make_kio_app(
                 f"{kio_id} failed: {exc}",
                 retryable=False,
             )
+        # Slide 10: logs_reference — structured pointer for future log store integration
+        step_id = envelope.payload.get("step_id", envelope.step_id or "")
+        result_payload.setdefault(
+            "logs_reference",
+            f"logstore://{envelope.session_id}/{step_id or kio_id}",
+        )
         return MessageEnvelope(
             message_id=str(uuid.uuid4()),
             session_id=envelope.session_id,
@@ -283,6 +289,24 @@ def _make_nats_handler(kio_id: str, handler: HandlerFn, js) -> Any:
                 payload=data.get("payload", {}),
             )
             logger.info("[{}] JOB_REQUEST (NATS) session={}", kio_id, envelope.session_id)
+
+            # Slide 18: publish ACKNOWLEDGED before processing so orchestrator
+            # knows the KIO received and accepted the job.
+            ack_msg = {
+                "message_type": "TASK_STATUS",
+                "agent_id": kio_id,
+                "task_id": envelope.session_id,
+                "status": "ACKNOWLEDGED",
+                "progress": 0,
+                "message": f"{kio_id} acknowledged job",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            if js is not None:
+                try:
+                    await js.publish(f"kio.{kio_id}.status", ack_msg)
+                except Exception:
+                    pass
+
             result_payload = await asyncio.wait_for(handler(envelope), timeout=timeout_s)
         except asyncio.TimeoutError:
             logger.error("[{}] NATS handler timed out after {}s", kio_id, timeout_s)
@@ -299,6 +323,12 @@ def _make_nats_handler(kio_id: str, handler: HandlerFn, js) -> Any:
                 retryable=False,
             )
 
+        # Slide 10: logs_reference — structured pointer for future log store integration
+        _step_id = data.get("payload", {}).get("step_id", data.get("step_id", ""))
+        result_payload.setdefault(
+            "logs_reference",
+            f"logstore://{data.get('session_id', '')}/{_step_id or kio_id}",
+        )
         result_envelope = {
             "message_id": str(uuid.uuid4()),
             "session_id": data.get("session_id", ""),

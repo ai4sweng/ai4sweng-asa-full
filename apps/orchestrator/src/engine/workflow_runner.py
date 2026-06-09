@@ -336,18 +336,46 @@ class WorkflowRunner:
                 break
 
     async def cancel(self, session_id: str, reason: str = "CANCELLED") -> None:
-        """Cancel an in-flight session (used by TimeoutMonitor and manual cancel)."""
+        """Cancel or time-out an in-flight session.
+
+        reason=="TASK_TIMEOUT" — emits WORKFLOW_TIMEOUT then WORKFLOW_FAILED;
+                                  sets status TIMEOUT then FAILED (Slide 18).
+        reason=="CANCELLED"    — emits WORKFLOW_CANCELLED; sets status CANCELLED.
+        """
         state = self._active.get(session_id)
         if not state:
             return
-        logger.warning("[{}] Session cancelled: {}", session_id[:8], reason)
-        state["status"] = "FAILED"
-        try:
-            await self._sm.update_status(session_id, "FAILED")
-        except Exception:
-            pass
-        self._emit("WORKFLOW_FAILED", session_id,
-                   f"Workflow {reason}", {"error": reason, "cancelled": True})
+
+        if reason == "TASK_TIMEOUT":
+            logger.warning("[{}] Session timed out", session_id[:8])
+            state["status"] = "TIMEOUT"
+            try:
+                await self._sm.update_status(session_id, "TIMEOUT")
+            except Exception:
+                pass
+            self._emit("WORKFLOW_TIMEOUT", session_id,
+                       "Workflow timed out — deadline exceeded",
+                       {"error": "TASK_TIMEOUT", "status": "TIMEOUT"})
+            # Transition immediately to FAILED (terminal)
+            state["status"] = "FAILED"
+            try:
+                await self._sm.update_status(session_id, "FAILED")
+            except Exception:
+                pass
+            self._emit("WORKFLOW_FAILED", session_id,
+                       "Workflow FAILED after timeout",
+                       {"error": reason})
+        else:
+            logger.warning("[{}] Session cancelled: {}", session_id[:8], reason)
+            state["status"] = "CANCELLED"
+            try:
+                await self._sm.update_status(session_id, "CANCELLED")
+            except Exception:
+                pass
+            self._emit("WORKFLOW_CANCELLED", session_id,
+                       "Workflow cancelled",
+                       {"reason": reason, "status": "CANCELLED"})
+
         self._cleanup_session(session_id)
         try:
             from .orchestrator_state import get_orchestrator_sm

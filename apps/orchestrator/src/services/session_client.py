@@ -118,6 +118,14 @@ class SessionClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_artifact(self, session_id: str, artifact_id: str) -> dict[str, Any] | None:
+        try:
+            resp = await self._client.get(f"/sessions/{session_id}/artifacts/{artifact_id}")
+            resp.raise_for_status()
+            return resp.json()
+        except Exception:
+            return None
+
     # ------------------------------------------------------------------
     # HITL
     # ------------------------------------------------------------------

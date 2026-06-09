@@ -75,6 +75,15 @@ async def get_artifacts(session_id: str):
     return await svc.get_artifacts(session_id)
 
 
+@router.get("/{session_id}/artifacts/{artifact_id}", response_model=ArtifactResponse)
+async def get_artifact(session_id: str, artifact_id: str):
+    svc = get_session_service()
+    result = await svc.get_artifact(artifact_id)
+    if not result or result.get("session_id") != session_id:
+        raise HTTPException(status_code=404, detail=f"Artifact {artifact_id} not found")
+    return result
+
+
 @router.post("/{session_id}/hitl", response_model=CheckpointResponse, status_code=201)
 async def create_hitl_checkpoint(session_id: str, req: CreateCheckpointRequest):
     svc = get_session_service()
