@@ -59,7 +59,7 @@ async def init_checkpointer():
 
             _pool = AsyncConnectionPool(
                 conninfo=dsn,
-                max_size=5,
+                max_size=cfg.checkpointer_pool_size,
                 open=False,
                 kwargs={"autocommit": True, "prepare_threshold": 0},
             )

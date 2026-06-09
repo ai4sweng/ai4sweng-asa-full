@@ -23,6 +23,7 @@ class WorkflowEvent:
     session_id: str
     message: str
     data: dict[str, Any] | None = None
+    owner: str = ""   # stamped by WorkflowRunner._emit; used for per-user SSE filtering
     ts: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_sse(self) -> str:
@@ -59,8 +60,14 @@ class EventBus:
             except asyncio.QueueFull:
                 pass  # slow subscriber — drop rather than block the publisher
 
-    async def subscribe(self) -> AsyncGenerator[WorkflowEvent, None]:
+    async def subscribe(self, owner: str | None = None) -> AsyncGenerator[WorkflowEvent, None]:
         """Yield events until the client disconnects.
+
+        Parameters
+        ----------
+        owner:
+            When set, only events belonging to this user are yielded.
+            Pass ``None`` (or omit) to receive all events (admin/debug use).
 
         A heartbeat is sent every ``_HEARTBEAT_INTERVAL`` seconds so that
         FastAPI's StreamingResponse can detect disconnected browsers promptly
@@ -85,7 +92,9 @@ class EventBus:
                 if event is None:
                     # Heartbeat — yield a comment line to keep the TCP connection alive.
                     yield WorkflowEvent("HEARTBEAT", "", "keepalive")
-                else:
+                elif owner is None or not event.owner or event.owner == owner:
+                    # Deliver only events that belong to this subscriber's user.
+                    # Events with no owner stamp (legacy / system events) are always delivered.
                     yield event
         finally:
             hb_task.cancel()

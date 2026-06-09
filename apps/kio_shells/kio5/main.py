@@ -121,8 +121,12 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
         response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
         result = json.loads(_strip_fences(response.content))
+        if not isinstance(result, dict):
+            raise ValueError(f"LLM returned non-object JSON: {type(result).__name__}")
         summary = result.get("summary", "")
         all_bugs = result.get("bugs", [])
+        if not isinstance(all_bugs, list):
+            raise ValueError(f"'bugs' field is not a list: {type(all_bugs).__name__}")
         bugs = [b for b in all_bugs if b.get("confirmed", True)]
         for i, bug in enumerate(bugs, 1):
             bug.setdefault("bug_id", f"BUG-{i:03d}")
@@ -136,6 +140,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
     owasp_vulns: list = []
     owasp_summary: str = ""
     hardened_files: list = []
+    owasp_error: str = ""
 
     if raw_code:
         try:
@@ -160,18 +165,26 @@ async def handler(envelope: MessageEnvelope) -> dict:
             logger.info("[kio5] A2A ← kio12: {} OWASP finding(s), {} hardened file(s)",
                         len(owasp_vulns), len(hardened_files))
         except Exception as exc:
-            logger.warning("[kio5] A2A kio12 call failed ({}); continuing without OWASP data", exc)
+            owasp_error = str(exc)
+            logger.error("[kio5] A2A kio12 call FAILED ({}); OWASP data unavailable — "
+                         "reviewer should be aware", exc)
     # ─────────────────────────────────────────────────────────────────────────
 
     bug_count = len(bugs)
     criticals = sum(1 for b in bugs if b.get("severity") == "CRITICAL")
     highs = sum(1 for b in bugs if b.get("severity") == "HIGH")
 
+    owasp_notice = ""
+    if owasp_error:
+        owasp_notice = f" | ⚠ OWASP scan FAILED: {owasp_error[:80]}"
+    elif owasp_vulns:
+        owasp_notice = f" | kio12 OWASP: {len(owasp_vulns)} finding(s)"
+
     hitl_question = (
         f"Bug Detector confirmed {bug_count} bug(s)"
         + (f" — {criticals} CRITICAL" if criticals else "")
         + (f", {highs} HIGH" if highs else "")
-        + (f" | kio12 OWASP: {len(owasp_vulns)} finding(s)" if owasp_vulns else "")
+        + owasp_notice
         + ". Approve patch generation?"
     )
 
@@ -183,6 +196,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
         # OWASP enrichment via A2A kio12
         "owasp_vulnerabilities": owasp_vulns,
         "owasp_summary": owasp_summary,
+        "owasp_error": owasp_error,   # empty string = success; non-empty = kio12 failed
         "hardened_files": hardened_files,
         # Pass kio4's generated test files through so kio7 can write and run them
         "test_files": last_artifact.get("files", []),

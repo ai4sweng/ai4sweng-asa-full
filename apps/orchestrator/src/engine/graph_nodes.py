@@ -122,17 +122,25 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
         artifact_data = resp.get("artifact_data", {})
         kio_message = resp.get("message", "Done.")
 
-        await sm.register_artifact(
-            session_id,
-            {
-                "artifact_id": artifact_id,
-                "producer_kio": kio_id,
-                "workflow_stage": f"step_{step + 1}_{kio_id}",
-                "artifact_type": "json",
-                "artifact_data": artifact_data,
-                "state": "CREATED",
-            },
-        )
+        try:
+            await sm.register_artifact(
+                session_id,
+                {
+                    "artifact_id": artifact_id,
+                    "producer_kio": kio_id,
+                    "workflow_stage": f"step_{step + 1}_{kio_id}",
+                    "artifact_type": "json",
+                    "artifact_data": artifact_data,
+                    "state": "CREATED",
+                },
+            )
+        except Exception as reg_exc:
+            # Non-fatal: the workflow continues, but the artifact may be missing
+            # from Session Manager. Log as error so operators can investigate.
+            logger.error(
+                "[{}] Failed to register artifact for {} ({}); workflow continues",
+                session_id[:8], kio_id, reg_exc,
+            )
 
         # If this KIO returned a dynamic pipeline, update the sequence in state.
         # kio1 (Router) and kio2 (Planner) use this to tell the orchestrator which KIOs to run.
@@ -274,6 +282,8 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
         _emit("WORKFLOW_COMPLETED", session_id,
               f"Workflow COMPLETED — {kio_count}/{kio_count} KIOs done.",
               {"session_id": session_id})
+        # Release in-process state after completion; durable state lives in PostgreSQL.
+        active.pop(session_id, None)
         return {"status": "COMPLETED"}
 
     # ------------------------------------------------------------------

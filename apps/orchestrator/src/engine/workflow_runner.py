@@ -108,6 +108,7 @@ class WorkflowRunner:
             "hitl_after": hitl_after or [],
             "description": description,
             "working_directory": working_directory,
+            "owner": owner,
             "progress": 0,
             "total": len(kio_sequence),
             "active_kio": None,
@@ -226,15 +227,17 @@ class WorkflowRunner:
         state = self._active.get(session_id)
         if not state:
             return None
-        checkpoint_id = state.get("pending_checkpoint_id")
+
+        # Pop atomically so a second concurrent approve() call sees None immediately
+        # and returns None, preventing a double-resume race.
+        checkpoint_id = state.pop("pending_checkpoint_id", None)
         if not checkpoint_id:
             return None
 
+        state["status"] = "ACTIVE"
         await self._sm.resolve_checkpoint(
             session_id, checkpoint_id, action="APPROVED", actor=actor, feedback=feedback
         )
-        state["status"] = "ACTIVE"
-        state["pending_checkpoint_id"] = None
         self._emit("HITL_APPROVED", session_id,
                    "Approved — resuming workflow.",
                    {"checkpoint_id": checkpoint_id, "actor": actor})
@@ -316,6 +319,17 @@ class WorkflowRunner:
             pass
         self._emit("WORKFLOW_FAILED", session_id,
                    f"Workflow FAILED: {exc}", {"error": str(exc)})
+        # Release in-process state; the durable record lives in PostgreSQL.
+        self._cleanup_session(session_id)
+
+    def _cleanup_session(self, session_id: str) -> None:
+        """Remove in-process session state after COMPLETED or FAILED.
+
+        Called at terminal states to prevent unbounded growth of _active and
+        _session_locks over the orchestrator's lifetime.
+        """
+        self._active.pop(session_id, None)
+        self._session_locks.pop(session_id, None)
 
     def _emit(
         self,
@@ -324,7 +338,8 @@ class WorkflowRunner:
         message: str,
         data: dict | None = None,
     ) -> None:
-        self._bus.publish(WorkflowEvent(event_type, session_id, message, data))
+        owner = self._active.get(session_id, {}).get("owner", "")
+        self._bus.publish(WorkflowEvent(event_type, session_id, message, data, owner=owner))
         logger.info("[{}] {}", event_type, message)
 
 

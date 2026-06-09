@@ -120,6 +120,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
     hitl_after = _FALLBACK_HITL
     routing_description = description
     reasoning = "Default route"
+    used_fallback = False
 
     try:
         llm_override = payload.get("llm_provider_override", "")
@@ -144,11 +145,13 @@ async def handler(envelope: MessageEnvelope) -> dict:
             reasoning = result.get("reasoning", "")
         else:
             logger.warning("[kio1] LLM returned invalid sequence {}, using fallback", raw_seq)
+            used_fallback = True
 
     except Exception as exc:
         logger.warning("[kio1] LLM routing failed ({}), using fallback", exc)
+        used_fallback = True
 
-    logger.info("[kio1] Route: {} hitl_after={}", kio_sequence, hitl_after)
+    logger.info("[kio1] Route: {} hitl_after={} fallback={}", kio_sequence, hitl_after, used_fallback)
 
     artifact_data = {
         "kio": KIO_ID,
@@ -156,6 +159,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
         "hitl_after": hitl_after,
         "intent_description": routing_description,
         "reasoning": reasoning,
+        "used_fallback_route": used_fallback,  # True if LLM failed or returned invalid output
         "code": code,
         "prompt": description,
         "findings": [],

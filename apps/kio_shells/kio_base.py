@@ -80,10 +80,20 @@ def make_kio_app(kio_id: str, title: str, handler: HandlerFn) -> FastAPI:
     @app.post("/execute")
     async def execute(envelope: MessageEnvelope) -> MessageEnvelope:
         """HTTP execution endpoint — always available for direct testing."""
+        from shared.config import get_settings as _cfg
         logger.info("[{}] JOB_REQUEST (HTTP) from {} session={}",
                     kio_id, envelope.source, envelope.session_id)
+        timeout_s = float(_cfg().kio_client_timeout) - 10  # headroom for reply
         try:
-            result_payload = await handler(envelope)
+            result_payload = await asyncio.wait_for(handler(envelope), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            logger.error("[{}] handler timed out after {}s", kio_id, timeout_s)
+            result_payload = {
+                "status": "FAILED",
+                "artifact_id": str(uuid.uuid4()),
+                "artifact_data": {},
+                "message": f"{kio_id} handler timed out after {timeout_s:.0f}s",
+            }
         except Exception as exc:
             logger.exception("[{}] execution failed: {}", kio_id, exc)
             result_payload = {
@@ -110,7 +120,9 @@ def _make_nats_handler(kio_id: str, handler: HandlerFn, js) -> Any:
     """Return an async NATS message handler that calls the KIO handler and replies."""
 
     async def _handle(data: dict[str, Any], msg: Any) -> None:
+        from shared.config import get_settings as _cfg
         reply_to: str = data.pop("_reply_to", "")
+        timeout_s = float(_cfg().kio_client_timeout) - 10
         try:
             envelope = MessageEnvelope(
                 message_id=data.get("message_id", str(uuid.uuid4())),
@@ -123,7 +135,15 @@ def _make_nats_handler(kio_id: str, handler: HandlerFn, js) -> Any:
                 payload=data.get("payload", {}),
             )
             logger.info("[{}] JOB_REQUEST (NATS) session={}", kio_id, envelope.session_id)
-            result_payload = await handler(envelope)
+            result_payload = await asyncio.wait_for(handler(envelope), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            logger.error("[{}] NATS handler timed out after {}s", kio_id, timeout_s)
+            result_payload = {
+                "status": "FAILED",
+                "artifact_id": str(uuid.uuid4()),
+                "artifact_data": {},
+                "message": f"{kio_id} handler timed out after {timeout_s:.0f}s",
+            }
         except Exception as exc:
             logger.exception("[{}] NATS handler error: {}", kio_id, exc)
             result_payload = {
@@ -144,7 +164,12 @@ def _make_nats_handler(kio_id: str, handler: HandlerFn, js) -> Any:
             "payload": result_payload,
         }
 
-        # Ack the JetStream message first, then reply
+        # ACK before reply (intentional ordering):
+        # If we replied first and the ACK failed, NATS would redeliver the
+        # message causing a duplicate LLM call — expensive and potentially
+        # harmful.  If we ack first and the reply fails, the orchestrator
+        # times out and marks the session FAILED, which is visible and
+        # recoverable.  For slow LLM workloads, ack-first is the lesser evil.
         await msg.ack()
 
         if reply_to:

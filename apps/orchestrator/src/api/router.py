@@ -1,11 +1,13 @@
 """Orchestrator workflow API — run, status, approve, SSE stream.
 
 All /workflow/* endpoints require a valid Bearer JWT (issued by POST /auth/login).
-The SSE stream (/workflow/events) is also protected so only authenticated
-clients receive live updates.
+The SSE stream (/workflow/events) is also protected: events are filtered so each
+authenticated user only receives their own session events.
 """
 from __future__ import annotations
 
+import re
+import uuid
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,6 +32,30 @@ router = APIRouter(
     tags=["workflow"],
 )
 
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+# Maximum concurrent ACTIVE sessions per user (basic DoS protection)
+_MAX_ACTIVE_PER_USER = 20
+
+
+def _validate_uuid(value: str, field: str) -> str:
+    if value and not _UUID_RE.match(value.lower()):
+        raise HTTPException(status_code=422, detail=f"{field} must be a valid UUID v4")
+    return value
+
+
+def _check_rate_limit(runner, username: str) -> None:
+    active_count = sum(
+        1 for s in runner._active.values()
+        if s.get("owner") == username and s.get("status") == "ACTIVE"
+    )
+    if active_count >= _MAX_ACTIVE_PER_USER:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many active sessions ({active_count}/{_MAX_ACTIVE_PER_USER}). "
+                   "Wait for existing workflows to complete.",
+        )
+
 
 @router.post("/run", status_code=202)
 async def run_workflow(
@@ -42,7 +68,9 @@ async def run_workflow(
     updates or poll GET /workflow/{session_id}/status for progress.
     The authenticated user's username is stamped as the session owner.
     """
+    _validate_uuid(req.workflow_id, "workflow_id")
     runner = get_runner()
+    _check_rate_limit(runner, current_user.username)
     session_id = await runner.run(
         workflow_id=req.workflow_id,
         kio_sequence=req.kio_sequence,
@@ -72,15 +100,15 @@ async def run_prompt_workflow(
 
     Returns 202 immediately; poll GET /workflow/{session_id}/status for progress.
     """
-    import uuid as _uuid
     runner = get_runner()
+    _check_rate_limit(runner, current_user.username)
     initial_context = {
         "code": req.code or "",
         "prompt": req.prompt,
         **req.context,
     }
     session_id = await runner.run(
-        workflow_id=str(_uuid.uuid4()),
+        workflow_id=str(uuid.uuid4()),
         kio_sequence=["kio1"],          # kio1 will expand this dynamically
         hitl_after=None,                # kio1 sets hitl_after in its response
         owner=current_user.username,
@@ -98,17 +126,21 @@ async def run_prompt_workflow(
 @router.get("/{session_id}/status", response_model=WorkflowStatusResponse)
 async def get_workflow_status(
     session_id: str,
-    _: UserInfo = Depends(get_current_user),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Return the current runtime state of a workflow session.
 
     Combines in-process LangGraph state (active KIO, progress counters) with
     artifact records fetched from Session Manager.
     """
+    _validate_uuid(session_id, "session_id")
     runner = get_runner()
     state = runner.get_state(session_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    # Ownership check: users can only view their own sessions
+    if state.get("owner") and state["owner"] != current_user.username:
+        raise HTTPException(status_code=403, detail="Access denied to this session")
     artifacts = await get_session_client().get_artifacts(session_id)
     return WorkflowStatusResponse(
         session_id=session_id,
@@ -131,10 +163,13 @@ async def approve_hitl(session_id: str, req: ApproveRequest,
     Returns 409 if there is no outstanding checkpoint.  The graph is resumed
     via Command(resume=feedback) — no polling required.
     """
+    _validate_uuid(session_id, "session_id")
     runner = get_runner()
     state = runner.get_state(session_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    if state.get("owner") and state["owner"] != current_user.username:
+        raise HTTPException(status_code=403, detail="Access denied to this session")
     checkpoint_id = state.get("pending_checkpoint_id")
     if not checkpoint_id:
         raise HTTPException(status_code=409, detail="No pending HITL checkpoint")
@@ -152,31 +187,44 @@ async def approve_hitl(session_id: str, req: ApproveRequest,
 
 
 @router.get("/events")
-async def event_stream(token: str | None = None):
+async def event_stream(
+    token: str | None = None,
+    current_user: UserInfo | None = Depends(get_current_user),
+):
     """Server-Sent Events stream for real-time workflow progress.
 
     Accepts the JWT via ``?token=`` query param because the browser EventSource
-    API cannot set Authorization headers.  Standard Bearer header also works
-    (validated by decode_token which accepts any raw token string).
+    API cannot set Authorization headers.  Standard Bearer header also works.
+
+    Security: each authenticated user only receives events for their own
+    sessions.  Events from other users are filtered server-side before
+    enqueueing, so cross-user observation is not possible.
+
     Each connected client gets an isolated asyncio.Queue (max 256 events).
     """
     import jwt as _jwt
     from shared.auth.jwt_handler import decode_token
-    from fastapi import HTTPException
-    if not token:
-        raise HTTPException(status_code=401, detail="Missing token — use ?token=<jwt>")
-    try:
-        decode_token(token)
-    except _jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token has expired")
-    except _jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Resolve identity: prefer Bearer header (via Depends), fall back to ?token=
+    username: str | None = None
+    if current_user is not None:
+        username = current_user.username
+    elif token:
+        try:
+            payload = decode_token(token)
+            username = payload.get("sub")
+        except _jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token has expired")
+        except _jwt.PyJWTError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    else:
+        raise HTTPException(status_code=401, detail="Missing token")
 
     bus = get_event_bus()
 
     async def _generate() -> AsyncGenerator[str, None]:
         yield 'data: {"event_type": "CONNECTED", "message": "Live stream active"}\n\n'
-        async for event in bus.subscribe():
+        async for event in bus.subscribe(owner=username):
             yield event.to_sse()
 
     return StreamingResponse(

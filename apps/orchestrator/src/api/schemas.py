@@ -1,9 +1,15 @@
 """Orchestrator API schemas."""
 from __future__ import annotations
 
-from typing import Any
-from pydantic import BaseModel, Field
+import re
 import uuid
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 class RunWorkflowRequest(BaseModel):
@@ -16,16 +22,21 @@ class RunWorkflowRequest(BaseModel):
         default=None,
         description="Insert HITL checkpoint after these KIOs (overrides KIO-driven HITL).",
     )
-    owner: str = "demo_user"
     description: str = ""
     working_directory: str = ""
+
+    @field_validator("workflow_id", mode="after")
+    @classmethod
+    def _validate_workflow_id(cls, v: str) -> str:
+        if not _UUID_RE.match(v.lower()):
+            raise ValueError("workflow_id must be a valid UUID v4")
+        return v
 
 
 class PromptWorkflowRequest(BaseModel):
     prompt: str = Field(description="Natural language instruction (e.g. 'bu kodda bug bul')")
     code: str | None = Field(default=None, description="Optional code snippet to analyse")
     context: dict[str, Any] = Field(default_factory=dict, description="Extra key/value context")
-    owner: str = "demo_user"
     working_directory: str = ""
 
 

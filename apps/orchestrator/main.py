@@ -4,6 +4,7 @@ Run from the EnisAliMerge root with PYTHONPATH set:
     PYTHONPATH=. uvicorn apps.orchestrator.main:app --port 8000
 Or via run_all.sh which sets PYTHONPATH automatically.
 """
+import asyncio
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -28,11 +29,19 @@ async def lifespan(app: FastAPI):
     # Initialise PostgreSQL LangGraph checkpointer early so the first workflow
     # request doesn't block on pool setup.
     from src.engine.checkpointer import init_checkpointer
-    await init_checkpointer()
+    try:
+        async with asyncio.timeout(30):
+            await init_checkpointer()
+    except TimeoutError:
+        logger.warning("Checkpointer init timed out — will use MemorySaver fallback")
 
     # Initialise WorkflowRunner so get_runner() is always safe in request handlers.
     from src.engine.workflow_runner import init_runner
-    await init_runner()
+    try:
+        async with asyncio.timeout(15):
+            await init_runner()
+    except TimeoutError:
+        logger.error("WorkflowRunner init timed out — service may not be functional")
 
     if cfg.use_nats:
         try:

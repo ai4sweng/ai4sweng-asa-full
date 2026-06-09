@@ -106,14 +106,23 @@ class Settings(BaseSettings):
     # Target repo for examples/buggy_fastapi_repo
     target_repo_path: str = "examples/buggy_fastapi_repo"
 
+    # Checkpointer PostgreSQL connection pool size
+    checkpointer_pool_size: int = 5
+
     @field_validator("jwt_secret_key", mode="after")
     @classmethod
     def _reject_default_jwt_secret(cls, value: str) -> str:
-        if value == "change-me-in-production" and os.environ.get("ENV", "dev") == "production":
-            raise ValueError(
-                "JWT_SECRET_KEY must be overridden in production — "
-                "set the JWT_SECRET_KEY environment variable."
+        if value == "change-me-in-production":
+            import sys
+            print(
+                "\nFATAL: JWT_SECRET_KEY is set to the insecure default value.\n"
+                "Generate a secret with:  openssl rand -hex 32\n"
+                "Then set JWT_SECRET_KEY=<result> in your .env file.\n",
+                file=sys.stderr,
             )
+            raise ValueError("JWT_SECRET_KEY must be overridden — refusing to start")
+        if len(value) < 32:
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters")
         return value
 
     @field_validator("target_repo_path", mode="before")
