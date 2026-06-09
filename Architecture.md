@@ -1,6 +1,6 @@
 # Architecture — KIO1 AI Software Engineering Platform
 
-**Version:** Phase 9 (Prompt Router + Code Generator)  
+**Version:** Phase 10 (Orchestrator SM + Timeout Monitor + Dynamic Agent Discovery)  
 **Stack:** Python 3.12 · FastAPI · LangGraph · NATS JetStream · PostgreSQL 16 · React 18
 
 ---
@@ -26,6 +26,9 @@
 17. [Docker Deployment](#17-docker-deployment)
 18. [Design Decisions & Trade-offs](#18-design-decisions--trade-offs)
 19. [Prompt Router & Full Platform Diagram](#19-prompt-router--full-platform-diagram)
+20. [Orchestrator State Machine](#20-orchestrator-state-machine)
+21. [Timeout Monitor](#21-timeout-monitor)
+22. [Dynamic Agent Discovery](#22-dynamic-agent-discovery)
 
 ---
 
@@ -86,22 +89,31 @@ apps/orchestrator/
 │
 ├── main.py                 FastAPI app + lifespan
 │   Lifespan order:
-│     1. init_checkpointer()  — open PG connection pool for LangGraph
-│     2. init_runner()        — build WorkflowRunner singleton
-│     3. get_jetstream()      — connect to NATS (if USE_NATS=true)
+│     1. init_checkpointer()      — open PG connection pool for LangGraph
+│     2. init_runner()            — build WorkflowRunner singleton, rehydrate()
+│     3. get_orchestrator_sm()    — init OrchestratorStateMachine (INITIALIZING)
+│     4. get_jetstream()          — connect to NATS (if USE_NATS=true)
+│     5. subscribe kio.*.capability → AgentRegistry (dynamic discovery)
+│     6. subscribe kio.*.status   → re-emit as TASK_PROGRESS SSE
+│     7. get_timeout_monitor()    — start background deadline sweep (every 5s)
 │
 ├── src/api/
 │   ├── auth_router.py       /auth/register  /auth/login  /auth/me
-│   ├── router.py            /workflow/run   /{id}/status  /{id}/approve  /events
+│   ├── router.py            /workflow/run  /workflow/prompt  /{id}/status  /{id}/approve  /events
 │   └── mcp_router.py        /mcp/tools  /mcp/tools/call
+│   (root)                   GET /status  — OrchestratorStateMachine summary
+│                            GET /agents  — list dynamically registered KIO agents
 │
 ├── src/engine/
-│   ├── workflow_runner.py   WorkflowRunner — run() / approve() / get_state()
-│   ├── workflow_graph.py    build_workflow_graph() → CompiledStateGraph
-│   ├── graph_nodes.py       plan / run_kio / hitl / advance / complete nodes
-│   ├── graph_state.py       WorkflowGraphState TypedDict
-│   ├── checkpointer.py      AsyncPostgresSaver factory (falls back to MemorySaver)
-│   └── event_bus.py         In-process SSE pub/sub (one Queue per subscriber)
+│   ├── workflow_runner.py      WorkflowRunner — run() / approve() / cancel() / get_state()
+│   ├── workflow_graph.py       build_workflow_graph() → CompiledStateGraph
+│   ├── graph_nodes.py          plan / run_kio / hitl / advance / complete nodes
+│   ├── graph_state.py          WorkflowGraphState TypedDict
+│   ├── checkpointer.py         AsyncPostgresSaver factory (falls back to MemorySaver)
+│   ├── event_bus.py            In-process SSE pub/sub (one Queue per subscriber)
+│   ├── orchestrator_state.py   OrchestratorStateMachine — Slide 16 state machine
+│   ├── timeout_monitor.py      TimeoutMonitor — background sweep for timed-out sessions
+│   └── agent_registry.py       AgentRegistry — dynamic KIO endpoint discovery
 │
 └── src/services/
     ├── kio_client.py        JetStream primary + HTTP fallback per KIO
@@ -227,9 +239,25 @@ class WorkflowGraphState(TypedDict):
     last_result:           dict[str, Any]
     artifacts:             Annotated[list[str], operator.add]   # append-only
     feedback:              str
-    status:                str
+    status:                str       # QUEUED→VALIDATING→READY→RUNNING→BLOCKED→COMPLETED/FAILED
     error:                 str | None
     pending_checkpoint_id: str | None
+    initial_context:       dict      # code / prompt injected by /workflow/prompt
+    correlation_id:        str       # shared across all messages in this invocation
+    timeout_seconds:       int | None  # per-workflow deadline (enforced by TimeoutMonitor)
+```
+
+### Workflow status lifecycle
+
+```
+QUEUED        ← session created, graph task enqueued
+VALIDATING    ← plan_node validating the kio_sequence
+READY         ← plan_node complete, first KIO about to dispatch
+RUNNING       ← run_kio_node dispatched a KIO (or HITL approved and resumed)
+DISPATCHED    ← KIO request sent, awaiting reply
+BLOCKED       ← HITL checkpoint paused the graph (human review needed)
+COMPLETED     ← complete_node finished all steps successfully
+FAILED        ← _handle_failure() or TimeoutMonitor.cancel() fired
 ```
 
 ### PostgreSQL Checkpointer
@@ -250,15 +278,15 @@ class WorkflowGraphState(TypedDict):
 ### Request-reply pattern
 
 ```
-Orchestrator                  NATS Server                    KIO Shell
+Orchestrator                  NATS Server                    KIO Shell (_poll_loop)
      │                             │                               │
      │  1. nc.subscribe(_kio_reply.{corr_id}, cb=_on_reply)      │
      │─────────────────────────────►│                              │
      │                             │                               │
      │  2. js.publish(kio.{id}.request, {…, _reply_to: …})       │
      │─────────────────────────────►│                              │
-     │                             │  3. push to durable consumer  │
-     │                             │─────────────────────────────►│
+     │                             │  3. KIO pulls via fetch(1)   │
+     │                             │◄─────────────────────────────│
      │                             │                               │ handler()
      │                             │                               │
      │                             │  4. msg.ack()                │
@@ -271,7 +299,9 @@ Orchestrator                  NATS Server                    KIO Shell
 
 **Key properties:**
 - Subscribe for reply **before** publishing request (avoids race where reply arrives before sub is set up)
-- JetStream for the request path — durable, `max_deliver=3`, `ack_wait = kio_client_timeout`
+- JetStream for the request path — durable **pull consumer**, `max_deliver=3`, `ack_wait = kio_client_timeout (seconds)`
+- KIO shells use `js.pull_subscribe()` + async `_poll_loop()` with `psub.fetch(batch=1, timeout=2.0)`
+- Push consumers are NOT compatible with WorkQueue-retention streams in nats-py 2.15+
 - Core NATS for the reply path — fast, ephemeral, no persistence needed
 - `asyncio.get_running_loop().create_future()` for the reply future — safe in Python 3.12
 
@@ -301,17 +331,28 @@ Every KIO shell is built by `make_kio_app(kio_id, title, handler)`:
 ```
 make_kio_app()
   │
-  ├── GET  /health/           → {"status":"ok","service":"kioN"}
+  ├── GET  /health/                → {"status":"ok","service":"kioN"}
   │
-  ├── POST /execute           → always available (HTTP, sync test path)
+  ├── POST /execute                → always available (HTTP, sync test path)
   │     envelope: MessageEnvelope
   │     → handler(envelope) → result_dict
   │     → wraps in JOB_RESULT envelope
   │
-  └── NATS kio.{id}.request   → started in lifespan if USE_NATS=true
-        durable consumer: "{kio_id}-worker"
-        → _make_nats_handler() → handler(envelope)
-        → msg.ack()            → publish reply to _reply_to subject
+  └── lifespan (USE_NATS=true):
+        ├── NATS pull consumer kio.{id}.request
+        │     durable: "{kio_id}-worker"
+        │     _poll_loop(): fetch(batch=1, timeout=2.0) in tight async loop
+        │     → asyncio.create_task(_dispatch(msg))
+        │     → handler(envelope) → msg.ack() → publish reply to _reply_to
+        │
+        ├── CAPABILITY_ANNOUNCEMENT on kio.{id}.capability
+        │     Published at startup + every 60s (heartbeat loop)
+        │     Payload: {kio_id, host, port, capabilities, timestamp}
+        │     Orchestrator subscribes kio.*.capability → AgentRegistry
+        │
+        └── publish_progress() helper available to handlers
+              Publishes TASK_STATUS to kio.{id}.status
+              Orchestrator subscribes kio.*.status → TASK_PROGRESS SSE
 ```
 
 ### Handler lifecycle
@@ -607,7 +648,8 @@ run_kio_node
     ▼
 hitl_node
     ├── sm.create_hitl_checkpoint()   → HumanApprovalRecord in PG
-    ├── update active[session_id]["status"] = "PENDING_REVIEW"
+    ├── update active[session_id]["status"] = "BLOCKED"  ← Slide 19 compliance
+    ├── emit SSE WORKFLOW_BLOCKED event
     ├── emit SSE HITL_CHECKPOINT event
     └── interrupt({checkpoint_id, hitl_question, kio})
         ← LangGraph saves state to AsyncPostgresSaver
@@ -630,8 +672,7 @@ If the orchestrator crashes while waiting for HITL approval:
 - The graph state is in PostgreSQL (`checkpoints` table)
 - The `HumanApprovalRecord` is in the `human_approvals` table
 - On restart, `init_runner()` recreates the runner but the `_active` dict is empty
-- Currently: the approve endpoint checks `_active` first, so post-crash approval requires the session to be in-process
-- **Improvement path:** on startup, scan PG for `PENDING_REVIEW` sessions and re-populate `_active` from checkpoint state
+- **Implemented:** `rehydrate()` on startup scans PG for non-terminal sessions (`QUEUED`, `VALIDATING`, `READY`, `RUNNING`, `BLOCKED`, `ACTIVE`, `PENDING_REVIEW`) and re-populates `_active` from the LangGraph checkpoint state — approve() works correctly after a restart
 
 ---
 
@@ -660,13 +701,18 @@ WorkflowEvent.to_sse() → "data: {json}\n\n"
 |---|---|
 | `CONNECTED` | Client connects |
 | `HEARTBEAT` | Every 15 seconds (keepalive) |
-| `SESSION_CREATED` | `runner.run()` called |
+| `SESSION_CREATED` | `runner.run()` called — status QUEUED |
 | `PLANNING_STARTED` / `PLANNING_DONE` | `plan_node` |
-| `KIO_STARTED` / `KIO_DONE` | `run_kio_node` |
-| `HITL_CHECKPOINT` | `hitl_node` pauses |
+| `WORKFLOW_VALIDATING` | `plan_node` starts validation — status VALIDATING |
+| `WORKFLOW_READY` | `plan_node` done, kio_sequence set — status READY |
+| `WORKFLOW_RUNNING` | `run_kio_node` begins a step — status RUNNING |
+| `KIO_STARTED` / `KIO_DONE` | `run_kio_node` dispatches / receives result; KIO_DONE includes `execution_time_ms` |
+| `WORKFLOW_BLOCKED` | `hitl_node` about to pause — status BLOCKED |
+| `HITL_CHECKPOINT` | `hitl_node` fires `interrupt()` with checkpoint details |
 | `HITL_APPROVED` | `runner.approve()` called |
+| `TASK_PROGRESS` | Intermediate status from KIO via `publish_progress()` → `kio.*.status` |
 | `WORKFLOW_COMPLETED` | `complete_node` |
-| `WORKFLOW_FAILED` | `_handle_failure()` |
+| `WORKFLOW_FAILED` | `_handle_failure()` or `TimeoutMonitor.cancel()` |
 
 ### Dashboard consumption
 
@@ -1192,3 +1238,127 @@ kio1 reads `payload["initial_context"]["code"]` and places it in its own
   To scale throughput: increase KIO replicas in docker-compose
   (e.g. deploy.replicas: 3 on kio5) — each replica handles one request at a time.
 ```
+
+---
+
+## 20. Orchestrator State Machine
+
+Implemented in `apps/orchestrator/src/engine/orchestrator_state.py`. Singleton: `get_orchestrator_sm()`.
+
+```
+                        agent_registered()
+                              │
+                              ▼
+    process start      ┌─────────────┐   workflow_submitted()    ┌────────────┐
+       ──────────────► │ INITIALIZING│ ─────────────────────────►│   ACTIVE   │
+                       └─────────────┘                           └─────┬──────┘
+                              │                                        │
+                   workflow_submitted()                    agent_failure_detected()
+                   (no agents yet)                                     │
+                              │                                        ▼
+                              ▼                                  ┌──────────┐
+                         ┌────────┐     agent_failure_detected() │ DEGRADED │
+                         │  IDLE  │ ─────────────────────────────►│          │
+                         │        │ ◄────────────────────────────│          │
+                         └───┬────┘     system_restored()        └──────────┘
+                             │                                        │
+                   workflow_submitted()                    critical_failure()
+                             │                                        │
+                             ▼                                        ▼
+                        ┌────────┐                            ┌──────────┐
+                        │ ACTIVE │                            │ RECOVERY │
+                        └────────┘                            └──────────┘
+                                                                     │
+                                                          system_restored() / shutdown()
+                                                                     │
+                                                                     ▼
+                                                              ┌──────────┐
+                                                              │ SHUTDOWN │
+                                                              └──────────┘
+```
+
+| State | `accepts_workflows()` | Meaning |
+|---|---|---|
+| `INITIALIZING` | false | Process started, no agents announced yet |
+| `IDLE` | true | All agents healthy, no workflows running |
+| `ACTIVE` | true | At least one workflow in flight |
+| `DEGRADED` | true | One or more agents went stale (>120s since last announcement) |
+| `RECOVERY` | false | Critical failure mode — workflows blocked until system_restored() |
+| `SHUTDOWN` | false | Graceful shutdown initiated |
+
+**GET /status** returns:
+```json
+{
+  "state": "ACTIVE",
+  "active_workflows": 2,
+  "degraded_agents": [],
+  "accepts_workflows": true
+}
+```
+
+---
+
+## 21. Timeout Monitor
+
+Implemented in `apps/orchestrator/src/engine/timeout_monitor.py`. Singleton: `get_timeout_monitor(active)`.
+
+The `TimeoutMonitor` runs a background `asyncio.Task` that sweeps `_active` every 5 seconds. If a session's `deadline` (ISO UTC string) is in the past, it calls `runner.cancel(session_id, "TASK_TIMEOUT")`.
+
+```python
+# How deadline is set
+if timeout_seconds:
+    deadline = (datetime.now(UTC) + timedelta(seconds=timeout_seconds)).isoformat()
+    _active[session_id]["deadline"] = deadline
+
+# How the monitor sweeps
+async def _sweep():
+    now = datetime.now(UTC)
+    for session_id, state in list(self._active.items()):
+        deadline_str = state.get("deadline")
+        if deadline_str:
+            dl = datetime.fromisoformat(deadline_str)
+            if now > dl:
+                await self._cancel_cb(session_id, "TASK_TIMEOUT")
+```
+
+`cancel()` on WorkflowRunner: marks status FAILED, calls `sm.update_status()`, emits `WORKFLOW_FAILED` SSE with `{"cancelled": True}`, notifies OrchestratorStateMachine.
+
+`timeout_seconds` is also forwarded to each KIO in the payload so the KIO can apply its own per-task deadline.
+
+---
+
+## 22. Dynamic Agent Discovery
+
+Implemented in `apps/orchestrator/src/engine/agent_registry.py`. Singleton: `get_agent_registry()`.
+
+```
+KIO Shell startup / every 60s
+  └── publish to kio.{id}.capability (Core NATS, not JetStream)
+        {
+          "kio_id":       "kio5",
+          "host":         "kio5",           ← Docker DNS name
+          "port":         8015,
+          "capabilities": ["bug_detection", "owasp_scan"],
+          "timestamp":    "2026-06-09T…"
+        }
+
+Orchestrator (lifespan)
+  └── js.subscribe_core("kio.*.capability", _on_capability)
+        └── registry.handle_announcement(data)
+              ├── stores (host, port) per kio_id
+              ├── timestamps last_seen
+              ├── if endpoint changed: calls on_endpoint_change callbacks
+              │     → KioClient._invalidate_client(kio_id)
+              └── calls get_orchestrator_sm().agent_registered(kio_id)
+                              or .agent_recovered(kio_id)
+
+KioClient._get_http_client(kio_id)
+  ├── 1. registry.get_endpoint(kio_id)         ← dynamic (announced host:port)
+  │         if stale (>120s): logs warning, calls sm.agent_failure_detected()
+  └── 2. static fallback: kio_port_map + kio_base_host
+
+GET /agents → registry.list_agents()
+  → [{"kio_id", "host", "port", "capabilities", "last_seen", "stale"}]
+```
+
+Agent staleness threshold is 120 seconds. A KIO is considered stale if `now - last_seen > 120s`. The `_stale_notified` flag prevents repeated `agent_failure_detected()` calls for the same stale agent — it resets on the next successful announcement.

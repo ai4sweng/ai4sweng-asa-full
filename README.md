@@ -380,6 +380,13 @@ All `/workflow/*` endpoints require `Authorization: Bearer <jwt>`.
 | `POST` | `/auth/login` | `{username, password}` → `{access_token, expires_in}` |
 | `GET` | `/auth/me` | Current user info |
 
+### Orchestrator (no auth required)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/status` | Orchestrator state machine status — state, active_workflows, accepts_workflows |
+| `GET` | `/agents` | Dynamically discovered KIO agents — their host, port, capabilities, staleness |
+
 ### Workflow
 
 | Method | Endpoint | Description |
@@ -412,9 +419,12 @@ All `/workflow/*` endpoints require `Authorization: Bearer <jwt>`.
   "kio_sequence": ["kio3", "kio5"],
   "hitl_after": ["kio5"],
   "description": "Scan for SQL injection",
-  "working_directory": "/path/to/repo"
+  "working_directory": "/path/to/repo",
+  "timeout_seconds": 600
 }
 ```
+
+- `timeout_seconds`: optional per-workflow deadline in seconds. The TimeoutMonitor cancels the session if it exceeds the deadline. Also forwarded to each KIO in the payload for per-task enforcement.
 
 ### MCP Tools
 
@@ -522,12 +532,15 @@ kio1-platform/
 │   │       │   ├── auth_router.py
 │   │       │   └── mcp_router.py
 │   │       └── engine/
-│   │           ├── workflow_runner.py     # WorkflowRunner singleton
+│   │           ├── workflow_runner.py     # WorkflowRunner singleton (run/approve/cancel)
 │   │           ├── workflow_graph.py      # LangGraph StateGraph builder
 │   │           ├── graph_nodes.py         # plan/run_kio/hitl/advance/complete + fallback
 │   │           ├── graph_state.py         # WorkflowGraphState TypedDict
 │   │           ├── checkpointer.py        # AsyncPostgresSaver
-│   │           └── event_bus.py           # In-process SSE publisher
+│   │           ├── event_bus.py           # In-process SSE publisher
+│   │           ├── orchestrator_state.py  # OrchestratorStateMachine (Slide 16)
+│   │           ├── timeout_monitor.py     # Background deadline sweep (every 5s)
+│   │           └── agent_registry.py      # Dynamic KIO endpoint discovery
 │   │
 │   ├── lm_engine/               # LLM proxy (POST /llm/complete)
 │   ├── session_manager/         # Session + artifact + HITL store

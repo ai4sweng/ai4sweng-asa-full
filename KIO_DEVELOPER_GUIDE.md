@@ -2,7 +2,7 @@
 
 **Platform:** KIO1 AI Engineering Platform  
 **Audience:** Teams implementing KIO2 – KIO13  
-**Version:** Phase 8 (PostgreSQL + LangGraph + NATS JetStream)
+**Version:** Phase 10 (Orchestrator SM + Timeout Monitor + NATS Pull Consumer + publish_progress)
 
 ---
 
@@ -14,18 +14,19 @@
 4. [Project Structure](#4-project-structure)
 5. [Implementing Your Handler (The Only File You Touch)](#5-implementing-your-handler-the-only-file-you-touch)
 6. [Input: The MessageEnvelope](#6-input-the-messageenvelope)
-7. [Output: The Result Dict Contract](#7-output-the-result-dict-contract)
-8. [Status Codes: DONE vs REVIEW_REQUIRED](#8-status-codes-done-vs-review_required)
-9. [Using the LLM](#9-using-the-llm)
-10. [Calling Another KIO (A2A)](#10-calling-another-kio-a2a)
-11. [Using MCP Tools (Filesystem, Shell)](#11-using-mcp-tools-filesystem-shell)
-12. [Triggering HITL from Your KIO](#12-triggering-hitl-from-your-kio)
-13. [Configuration & Environment Variables](#13-configuration--environment-variables)
-14. [Running Locally (Without Docker)](#14-running-locally-without-docker)
-15. [Running With Docker Compose](#15-running-with-docker-compose)
-16. [Testing Your KIO](#16-testing-your-kio)
-17. [Handoff Checklist](#17-handoff-checklist)
-18. [Common Mistakes](#18-common-mistakes)
+7. [Reporting Intermediate Progress](#7-reporting-intermediate-progress)
+8. [Output: The Result Dict Contract](#8-output-the-result-dict-contract)
+9. [Status Codes: DONE vs REVIEW_REQUIRED](#9-status-codes-done-vs-review_required)
+10. [Using the LLM](#10-using-the-llm)
+11. [Calling Another KIO (A2A)](#11-calling-another-kio-a2a)
+12. [Using MCP Tools (Filesystem, Shell)](#12-using-mcp-tools-filesystem-shell)
+13. [Triggering HITL from Your KIO](#13-triggering-hitl-from-your-kio)
+14. [Configuration & Environment Variables](#14-configuration--environment-variables)
+15. [Running Locally (Without Docker)](#15-running-locally-without-docker)
+16. [Running With Docker Compose](#16-running-with-docker-compose)
+17. [Testing Your KIO](#17-testing-your-kio)
+18. [Handoff Checklist](#18-handoff-checklist)
+19. [Common Mistakes](#19-common-mistakes)
 
 ---
 
@@ -61,7 +62,11 @@ User (dashboard / API)
   Session Manager (PostgreSQL)  ←  stores all artifacts + checkpoints
 ```
 
-**Transport:** By default, the orchestrator sends your KIO a request via **NATS JetStream** (durable, at-least-once). If NATS is unavailable, it falls back to **HTTP POST /execute**. Your handler code is the same for both — the platform handles transport selection transparently.
+**Transport:** By default, the orchestrator sends your KIO a request via **NATS JetStream** using a **pull consumer** (durable, at-least-once). Your KIO polls for messages using `fetch(batch=1, timeout=2s)`. If NATS is unavailable, it falls back to **HTTP POST /execute**. Your handler code is the same for both — the platform handles transport selection transparently.
+
+**Capability announcement:** On startup, `make_kio_app()` automatically publishes a `CAPABILITY_ANNOUNCEMENT` message to `kio.{id}.capability` and repeats it every 60 seconds. The orchestrator subscribes to `kio.*.capability` and uses this to discover KIO endpoints dynamically — you don't need to configure KIO locations manually.
+
+**Intermediate progress:** While your handler runs, you can call `publish_progress()` to emit intermediate `TASK_STATUS` events that appear as `TASK_PROGRESS` SSE events in the dashboard. See [Section 7](#7-reporting-intermediate-progress).
 
 ---
 
@@ -215,12 +220,24 @@ if __name__ == "__main__":
 
 ## 6. Input: The MessageEnvelope
 
-Your handler receives a `MessageEnvelope` Pydantic model. The fields you'll use most:
+Your handler receives a `MessageEnvelope` Pydantic model. Full field reference:
 
 ```python
-envelope.session_id      # str — identifies the current workflow run
-envelope.workflow_id     # str — identifies the workflow definition
-envelope.payload         # dict — everything the orchestrator put in for you
+# Routing / tracing (set by the orchestrator — read-only in your handler)
+envelope.message_id        # str — unique message UUID
+envelope.correlation_id    # str — UUID shared across all messages in one workflow invocation
+envelope.step_id           # str — UUID for this specific pipeline step
+envelope.protocol_version  # str — always "1.0.0"
+envelope.project_id        # str — from PROJECT_ID env var (e.g. "kio1-platform")
+envelope.session_id        # str — identifies the current workflow run
+envelope.workflow_id       # str — identifies the workflow definition
+envelope.source            # str — sender (orchestrator's project_id)
+envelope.target            # str — your KIO ID (e.g. "kio4")
+envelope.timestamp         # str — ISO-8601 UTC timestamp
+envelope.message_type      # str — always "JOB_REQUEST"
+
+# Your data
+envelope.payload           # dict — everything the orchestrator put in for you
 ```
 
 ### Standard payload keys
@@ -232,6 +249,7 @@ The orchestrator always sets these in `envelope.payload`:
 | `description` | `str` | User's task description ("Find SQL injection bugs") |
 | `working_directory` | `str` | Absolute path of the repo being processed |
 | `feedback` | `str` | Human feedback if the workflow was paused at HITL before this step |
+| `timeout_seconds` | `int\|None` | Per-task timeout if the caller set one; `None` means use the platform default |
 
 ### How to pass data between KIOs
 
@@ -260,7 +278,42 @@ async def _get_previous_findings(session_id: str) -> list[dict]:
 
 ---
 
-## 7. Output: The Result Dict Contract
+## 7. Reporting Intermediate Progress
+
+While your handler is doing long-running work (scanning many files, multiple LLM calls, etc.), call `publish_progress()` to send live progress updates to the dashboard. The orchestrator subscribes to `kio.*.status` and re-emits each update as a `TASK_PROGRESS` SSE event.
+
+```python
+from kio_base import publish_progress
+
+async def handler(envelope: MessageEnvelope) -> dict:
+    js = None  # publish_progress is a no-op when js is None (HTTP-only mode)
+    try:
+        from shared.messaging.jetstream import get_jetstream
+        js = await get_jetstream()
+    except Exception:
+        pass
+
+    await publish_progress(KIO_ID, envelope.session_id, 10, "Starting analysis…", js)
+
+    # do work …
+    for i, file in enumerate(files):
+        # process file…
+        pct = int(10 + 80 * (i + 1) / len(files))
+        await publish_progress(KIO_ID, envelope.session_id, pct, f"Scanned {i+1}/{len(files)} files", js)
+
+    await publish_progress(KIO_ID, envelope.session_id, 100, "Done", js)
+    return { "status": "DONE", … }
+```
+
+`publish_progress(kio_id, session_id, progress_pct, message, js)`:
+- `progress_pct` is clamped to `[0, 100]`
+- `js` must be a connected `JetStreamManager`; if `None` the call is silently skipped
+- Publishes to `kio.{kio_id}.status` with `message_type="TASK_STATUS"` and `status="RUNNING"`
+- Dashboard shows each update as a `TASK_PROGRESS` event line
+
+---
+
+## 8. Output: The Result Dict Contract
 
 Your handler **must** return a `dict` with these keys:
 
@@ -296,7 +349,7 @@ The whole dict is stored verbatim in PostgreSQL. The dashboard and downstream KI
 
 ---
 
-## 8. Status Codes: DONE vs REVIEW_REQUIRED
+## 9. Status Codes: DONE vs REVIEW_REQUIRED
 
 | Value | Meaning | Orchestrator reaction |
 |---|---|---|
@@ -313,7 +366,7 @@ The whole dict is stored verbatim in PostgreSQL. The dashboard and downstream KI
 
 ---
 
-## 9. Using the LLM
+## 10. Using the LLM
 
 Use `shared.llm.factory.create_llm_provider()` to get the configured provider (Ollama/OpenAI/Claude — set by `LLM_PROVIDER` env var). This is the same provider the LM Engine uses.
 
@@ -388,7 +441,7 @@ system = (
 
 ---
 
-## 10. Calling Another KIO (A2A)
+## 11. Calling Another KIO (A2A)
 
 If your KIO needs to invoke a peer KIO directly (without routing through the orchestrator loop), use `A2AClient`:
 
@@ -419,7 +472,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
 ---
 
-## 11. Using MCP Tools (Filesystem, Shell)
+## 12. Using MCP Tools (Filesystem, Shell)
 
 The platform exposes filesystem and shell tools via the MCP registry. You can call them directly in Python without going through the HTTP endpoint:
 
@@ -454,7 +507,7 @@ timed_out  = result["timed_out"]
 
 ---
 
-## 12. Triggering HITL from Your KIO
+## 13. Triggering HITL from Your KIO
 
 Simply return `"status": "REVIEW_REQUIRED"` with a `"hitl_question"` string. The platform does the rest:
 
@@ -493,7 +546,7 @@ if feedback:
 
 ---
 
-## 13. Configuration & Environment Variables
+## 14. Configuration & Environment Variables
 
 All settings live in `shared/config.py` and are loaded from `.env`.
 
@@ -547,7 +600,7 @@ kio8:
 
 ---
 
-## 14. Running Locally (Without Docker)
+## 15. Running Locally (Without Docker)
 
 ### 1. Copy and configure .env
 
@@ -609,6 +662,10 @@ curl -X POST http://localhost:8014/execute \
   -H "Content-Type: application/json" \
   -d '{
     "message_id": "test-001",
+    "correlation_id": "corr-001",
+    "step_id": "step-001",
+    "protocol_version": "1.0.0",
+    "project_id": "kio1-platform",
     "session_id": "test-session",
     "workflow_id": "test-workflow",
     "source": "test",
@@ -624,7 +681,7 @@ curl -X POST http://localhost:8014/execute \
 
 ---
 
-## 15. Running With Docker Compose
+## 16. Running With Docker Compose
 
 ```bash
 # Build and start everything
@@ -656,7 +713,7 @@ if __name__ == "__main__":
 
 ---
 
-## 16. Testing Your KIO
+## 17. Testing Your KIO
 
 ### Unit test the handler directly
 
@@ -680,6 +737,10 @@ from apps.kio_shells.kio4.main import handler
 async def test_handler_returns_done():
     envelope = MessageEnvelope(
         message_id="test",
+        correlation_id="corr-1",
+        step_id="step-1",
+        protocol_version="1.0.0",
+        project_id="kio1-platform",
         session_id="sess-1",
         workflow_id="wf-1",
         source="test",
@@ -756,7 +817,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ---
 
-## 17. Handoff Checklist
+## 18. Handoff Checklist
 
 Before handing off your KIO to the platform team, confirm:
 
@@ -788,7 +849,7 @@ Before handing off your KIO to the platform team, confirm:
 
 ---
 
-## 18. Common Mistakes
+## 19. Common Mistakes
 
 ### Mistake 1 — Raising exceptions instead of degrading
 
