@@ -25,6 +25,7 @@ import uuid
 from typing import Any, Awaitable, Callable
 
 import nats
+import nats.errors
 import nats.js.errors
 from nats.aio.client import Client as NatsClient
 from nats.js import JetStreamContext
@@ -66,7 +67,7 @@ class JetStreamManager:
                 subjects=["kio.*.request"],
                 retention=RetentionPolicy.WORK_QUEUE,
                 storage=StorageType.FILE,
-                max_age=3_600_000_000_000,  # 1 hour in nanoseconds
+                max_age=3600,  # 1 hour in seconds (nats-py 2.x uses seconds)
                 # Note: max_deliver and ack_wait are consumer properties, not stream properties.
                 # They are set when consumers subscribe via subscribe_requests().
             )
@@ -126,7 +127,11 @@ class JetStreamManager:
     # ------------------------------------------------------------------
 
     async def subscribe_requests(self, kio_id: str, handler: HandlerFn) -> None:
-        """Start a durable push-consumer for kio.{kio_id}.request.
+        """Start a durable pull-consumer for kio.{kio_id}.request.
+
+        Pull consumers are fully compatible with WorkQueue retention streams in
+        nats-py 2.x (push consumers require a deliver subject which conflicts
+        with the WorkQueue stream in some server/client combinations).
 
         *handler* receives ``(envelope_dict, nats_msg)`` — it must call
         ``await nats_msg.ack()`` after successful processing.
@@ -140,9 +145,35 @@ class JetStreamManager:
 
         durable = f"{kio_id}-worker"
         cfg = get_settings()
-        ack_wait_ns = int(cfg.kio_client_timeout) * 1_000_000_000
+        ack_wait_s = int(cfg.kio_client_timeout)  # nats-py 2.x uses seconds
 
-        async def _cb(msg: Any) -> None:
+        psub = await self._js.pull_subscribe(
+            f"kio.{kio_id}.request",
+            durable=durable,
+            config=nats.js.api.ConsumerConfig(
+                max_deliver=3,
+                ack_wait=ack_wait_s,
+                filter_subject=f"kio.{kio_id}.request",
+            ),
+        )
+        logger.info("[{}] JetStream pull consumer '{}' active (max_deliver=3 ack_wait={}s)",
+                    kio_id, durable, ack_wait_s)
+
+        async def _poll_loop() -> None:
+            while True:
+                try:
+                    msgs = await psub.fetch(batch=1, timeout=2.0)
+                    for msg in msgs:
+                        asyncio.create_task(_dispatch(msg))
+                except (nats.js.errors.FetchTimeoutError, nats.errors.TimeoutError):
+                    pass  # no messages — keep polling
+                except asyncio.CancelledError:
+                    break
+                except Exception as exc:
+                    logger.warning("[{}] Pull fetch error: {}", kio_id, exc)
+                    await asyncio.sleep(1)
+
+        async def _dispatch(msg: Any) -> None:
             try:
                 data = json.loads(msg.data.decode())
                 await handler(data, msg)
@@ -150,24 +181,29 @@ class JetStreamManager:
                 logger.exception("[{}] JetStream handler error: {}", kio_id, exc)
                 await msg.nak()
 
-        await self._js.subscribe(
-            f"kio.{kio_id}.request",
-            durable=durable,
-            cb=_cb,
-            manual_ack=True,
-            config=nats.js.api.ConsumerConfig(
-                max_deliver=3,
-                ack_wait=ack_wait_ns,
-            ),
-        )
-        logger.info("[{}] JetStream consumer '{}' listening (max_deliver=3 ack_wait={}s)",
-                    kio_id, durable, cfg.kio_client_timeout)
+        asyncio.create_task(_poll_loop())
 
     async def publish_reply(self, reply_subject: str, result: dict[str, Any]) -> None:
         """Send the JOB_RESULT back to the orchestrator via core NATS (fast path)."""
         if self._nc is None:
             raise RuntimeError("JetStreamManager not connected")
         await self._nc.publish(reply_subject, json.dumps(result).encode())
+
+    async def publish(self, subject: str, data: dict[str, Any]) -> None:
+        """Fire-and-forget publish to a core NATS subject (heartbeats, events)."""
+        if self._nc is None:
+            raise RuntimeError("JetStreamManager not connected")
+        await self._nc.publish(subject, json.dumps(data).encode())
+
+    async def subscribe_core(self, subject: str, cb) -> Any:
+        """Subscribe to a core NATS subject (supports * and > wildcards).
+
+        Used by the orchestrator to receive CAPABILITY_ANNOUNCEMENT and HEARTBEAT
+        messages from KIO shells without going through JetStream.
+        """
+        if self._nc is None:
+            raise RuntimeError("JetStreamManager not connected")
+        return await self._nc.subscribe(subject, cb=cb)
 
     # ------------------------------------------------------------------
     # Lifecycle

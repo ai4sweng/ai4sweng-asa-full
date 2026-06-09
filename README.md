@@ -7,6 +7,7 @@ An agentic platform that orchestrates a pipeline of AI-powered microservices (KI
 ## Table of Contents
 
 - [Overview](#overview)
+- [Technologies](#technologies)
 - [Quick Start — Docker](#quick-start--docker)
 - [Quick Start — Local](#quick-start--local)
 - [Service Map](#service-map)
@@ -54,6 +55,86 @@ User (natural language prompt)
 5. **Agent-to-Agent (A2A)**: KIO5 calls KIO12 directly for OWASP Top 10 enrichment without going through the orchestrator
 6. **LLM Fallback**: if qwen7b fails on any step, HITL asks the user to approve a retry with Claude
 7. All artifacts, checkpoints, and workflow state are persisted to PostgreSQL and streamed via SSE
+
+---
+
+## Technologies
+
+### Workflow Orchestration
+
+| Technology | Role |
+|---|---|
+| **[LangGraph](https://github.com/langchain-ai/langgraph)** | Core workflow engine. The KIO pipeline is modelled as a `StateGraph` with named nodes (`plan → run_kio → hitl → advance → complete`) and conditional edges. Supports interrupt-and-resume for HITL checkpoints. |
+| **[AsyncPostgresSaver](https://github.com/langchain-ai/langgraph)** | LangGraph's PostgreSQL checkpointer (`langgraph-checkpoint-postgres`). Persists the full graph state after every node — workflow state survives process restarts. Uses three tables: `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`. |
+
+### Messaging
+
+| Technology | Role |
+|---|---|
+| **[NATS](https://nats.io)** | High-performance cloud-native messaging system. Used as the inter-service transport between the orchestrator and KIO shells. |
+| **[NATS JetStream](https://docs.nats.io/nats-concepts/jetstream)** | Persistent, at-least-once message delivery layer on top of NATS. The orchestrator publishes `JOB_REQUEST` messages to per-KIO subjects (`kio.kio5.request`); KIO shells subscribe with durable consumers and reply on ephemeral reply subjects. JetStream guarantees redelivery on consumer failure and prevents message loss between restarts. ACK-before-reply ordering is intentional — avoids duplicate LLM calls on redelivery. |
+| **SSE (Server-Sent Events)** | Real-time event streaming from the orchestrator to the frontend. Each authenticated user gets an isolated queue; events are filtered by session owner before delivery. Implemented via FastAPI `StreamingResponse` with `text/event-stream`. |
+| **JSON** | Wire format for all inter-service messages. `MessageEnvelope` (JOB_REQUEST / JOB_RESULT) is serialized to JSON before being published to NATS JetStream and deserialized by KIO consumers. REST request/response bodies, SSE event payloads, LLM prompts, and artifact data are all JSON. `llm_json_coerce.py` in `shared/llm/` handles hallucination-resilient JSON parsing when LLM output is malformed. |
+
+### API & Web Framework
+
+| Technology | Role |
+|---|---|
+| **[FastAPI](https://fastapi.tiangolo.com)** | Async REST API framework used by every service (orchestrator, session manager, LM engine, all KIO shells). Provides automatic OpenAPI docs at `/docs`. |
+| **[Uvicorn](https://www.uvicorn.org)** | ASGI server that hosts FastAPI. Used directly in Docker (`uvicorn main:app`). |
+| **[Pydantic v2](https://docs.pydantic.dev/latest/)** | Data validation for all API schemas and service configuration. `pydantic-settings` loads `Settings` from environment variables with validation on startup (e.g. JWT secret strength check). |
+
+### Authentication & Security
+
+| Technology | Role |
+|---|---|
+| **[PyJWT](https://pyjwt.readthedocs.io)** | HS256 JWT token generation and validation. The orchestrator issues tokens on login; all `/workflow/*` endpoints verify the Bearer header. |
+| **[bcrypt](https://pypi.org/project/bcrypt/)** | Password hashing for the user store. Passwords are never stored in plain text. |
+
+### Database & Persistence
+
+| Technology | Role |
+|---|---|
+| **[PostgreSQL 16](https://www.postgresql.org)** | Primary database for sessions, artifacts, HITL checkpoints, users, and LangGraph graph state. |
+| **[SQLAlchemy 2 (async)](https://docs.sqlalchemy.org)** | Async ORM for the session manager. Uses `AsyncSession` + `asyncpg` driver. |
+| **[psycopg3 + psycopg-pool](https://www.psycopg.org/psycopg3/)** | PostgreSQL driver used specifically by the LangGraph `AsyncPostgresSaver`. A dedicated `AsyncConnectionPool` is maintained separate from the application pool. |
+| **[Alembic](https://alembic.sqlalchemy.org)** | Database schema migration tool. Migrations live in `shared/migrations/`. |
+| **[asyncpg](https://magicstack.github.io/asyncpg/)** | High-performance async PostgreSQL driver used by the SQLAlchemy session manager pool. |
+
+### LLM / AI Providers
+
+| Technology | Role |
+|---|---|
+| **[Ollama](https://ollama.com)** | Runs local LLMs on the host machine. Default primary provider. The platform is tested with `qwen2.5-coder:7b` but any Ollama-compatible model works. Accessed from Docker via `host.docker.internal:11434`. |
+| **[Anthropic Claude](https://www.anthropic.com)** | Cloud LLM provider. Used as the HITL-driven fallback when Ollama fails. Default model: `claude-haiku-4-5-20251001`. |
+| **[OpenAI](https://platform.openai.com)** | Alternative cloud LLM provider. Supported alongside Anthropic via the shared `LLMProvider` abstraction. |
+| **[Langfuse](https://langfuse.com)** | Optional LLM observability and tracing. Wraps provider calls to record prompts, completions, latency, and cost. Disabled by default (`LANGFUSE_SECRET_KEY` not set). |
+
+### Frontend
+
+| Technology | Role |
+|---|---|
+| **[React 18](https://react.dev)** | Component-based UI framework for the operator dashboard. |
+| **[Vite](https://vitejs.dev)** | Frontend build tool and dev server. Produces optimised static assets for the Docker image. |
+| **[Tailwind CSS](https://tailwindcss.com)** | Utility-first CSS framework used for all dashboard styling. |
+| **[Zustand](https://zustand-demo.pmnd.rs)** | Lightweight client-side state manager. Holds workflow status, HITL checkpoint state, and SSE event log in a single reactive store. |
+| **[nginx](https://nginx.org)** | Serves the built React app as static files inside the `dashboard` Docker container. |
+
+### Infrastructure & Tooling
+
+| Technology | Role |
+|---|---|
+| **[Docker / Docker Compose](https://docs.docker.com/compose/)** | All services run as containers. A single `docker compose up --build` starts the full stack. KIO shells share a single Dockerfile (`ARG KIO_ID` selects the entry point). |
+| **[Python 3.12](https://www.python.org)** | Runtime for all backend services. Requires 3.12+ for `asyncio.timeout()` and `ExceptionGroup`. |
+| **[uv](https://docs.astral.sh/uv/)** | Fast Python package manager and virtual environment tool. Used instead of pip for local development. |
+
+### Protocols & Patterns
+
+| Technology | Role |
+|---|---|
+| **A2A (Agent-to-Agent)** | Custom HTTP protocol for direct KIO-to-KIO calls without routing through the orchestrator graph. KIO5 calls KIO12 via `A2AClient.invoke()`, sharing `session_id`, `workflow_id`, and `llm_provider_override`. |
+| **MCP (Model Context Protocol)** | Tool registry exposed at `/mcp/tools`. Provides KIOs with structured access to filesystem operations and shell commands. Built-in tools: `filesystem.read_file`, `filesystem.list_directory`, `filesystem.write_file`, `shell.run_command`. |
+| **HITL (Human-in-the-Loop)** | Workflow pause-and-resume pattern implemented via LangGraph's `interrupt()`. The graph pauses at a checkpoint; the operator reviews and calls `POST /workflow/{id}/approve`; the graph resumes via `Command(resume=feedback)`. |
 
 ---
 

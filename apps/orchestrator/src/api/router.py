@@ -78,6 +78,7 @@ async def run_workflow(
         owner=current_user.username,
         description=req.description,
         working_directory=req.working_directory,
+        timeout_seconds=req.timeout_seconds,
     )
     return {
         "session_id": session_id,

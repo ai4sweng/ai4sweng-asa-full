@@ -103,6 +103,7 @@ class SessionClient:
     async def register_artifact(
         self, session_id: str, artifact: dict[str, Any]
     ) -> dict[str, Any]:
+        # parent_artifact_id is passed through as-is if present in the artifact dict
         resp = await _with_retry(
             self._client.post, f"/sessions/{session_id}/artifacts",
             json=artifact,

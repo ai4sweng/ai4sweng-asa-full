@@ -6,6 +6,7 @@ event bus are injected via closures built by ``make_nodes()``.
 """
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
@@ -38,17 +39,28 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
 
     async def plan_node(state: WorkflowGraphState) -> dict[str, Any]:
         """Plan the KIO sequence via LM Engine if none was supplied."""
-        if state.get("kio_sequence"):
-            return {}
         session_id = state["session_id"]
-        _emit("PLANNING_STARTED", session_id, "Planning workflow via LM Engine…")
+        if state.get("kio_sequence"):
+            # Pipeline already provided — skip validation, mark READY
+            if session_id in active:
+                active[session_id]["status"] = "READY"
+            _emit("WORKFLOW_READY", session_id,
+                  f"Pipeline ready: {' → '.join(k.upper() for k in state['kio_sequence'])}",
+                  {"kio_sequence": state["kio_sequence"]})
+            return {}
+        # Need LM planning — transition to VALIDATING (Slide 19)
+        if session_id in active:
+            active[session_id]["status"] = "VALIDATING"
+        _emit("WORKFLOW_VALIDATING", session_id,
+              "Validating workflow description and planning pipeline…")
         kio_seq, reasoning = await lm.plan_workflow(state["description"], session_id)
         arrow = " → ".join(k.upper() for k in kio_seq)
-        _emit("PLANNING_DONE", session_id, f"Planned pipeline: {arrow}",
-              {"kio_sequence": kio_seq, "reasoning": reasoning})
         if session_id in active:
             active[session_id]["kio_sequence"] = kio_seq
             active[session_id]["total"] = len(kio_seq)
+            active[session_id]["status"] = "READY"
+        _emit("WORKFLOW_READY", session_id, f"Pipeline ready: {arrow}",
+              {"kio_sequence": kio_seq, "reasoning": reasoning})
         return {"kio_sequence": kio_seq}
 
     # ------------------------------------------------------------------
@@ -69,10 +81,26 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
         if session_id in active:
             active[session_id]["active_kio"] = kio_id
             active[session_id]["progress"] = step
+            active[session_id]["status"] = "RUNNING"
+        _emit("WORKFLOW_RUNNING", session_id,
+              f"Executing step {step + 1}/{len(kio_seq)} — {kio_id.upper()}",
+              {"kio": kio_id, "step": step + 1})
 
         last_artifact = (
             state.get("last_result", {}).get("payload", {}).get("artifact_data", {})
         )
+        step_id = f"step_{step + 1}_{kio_id}"
+        correlation_id = state.get("correlation_id", "")
+        parent_artifact_id = state["artifacts"][-1] if state.get("artifacts") else None
+
+        # Emit DISPATCHED before the blocking execute call
+        if session_id in active:
+            active[session_id]["status"] = "DISPATCHED"
+        _emit("KIO_DISPATCHED", session_id,
+              f"[{kio_id.upper()}] Dispatching job… (step {step + 1}/{len(kio_seq)})",
+              {"kio": kio_id, "step": step + 1, "step_id": step_id, "correlation_id": correlation_id})
+
+        _t0 = time.monotonic()
         try:
             result = await kio.execute(
                 kio_id=kio_id,
@@ -85,7 +113,11 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
                     "last_artifact": last_artifact,
                     "initial_context": state.get("initial_context", {}),
                     "llm_provider_override": state.get("llm_provider_override", ""),
+                    "retry_policy": {"max_retries": 1, "backoff_strategy": "exponential"},
+                    "timeout_seconds": state.get("timeout_seconds"),  # per-task (Slide 8)
                 },
+                correlation_id=correlation_id,
+                step_id=step_id,
             )
         except Exception as exc:
             cfg = get_settings()
@@ -117,6 +149,11 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
                 }
             raise
 
+        # Job returned — back to ACTIVE while we register the artifact
+        execution_time_ms = int((time.monotonic() - _t0) * 1000)
+        if session_id in active:
+            active[session_id]["status"] = "ACTIVE"
+
         resp = result.get("payload", {})
         artifact_id = resp.get("artifact_id", str(uuid.uuid4()))
         artifact_data = resp.get("artifact_data", {})
@@ -132,6 +169,7 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
                     "artifact_type": "json",
                     "artifact_data": artifact_data,
                     "state": "CREATED",
+                    "parent_artifact_id": parent_artifact_id,
                 },
             )
         except Exception as reg_exc:
@@ -158,7 +196,7 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
             })
             _emit("KIO_DONE", session_id, f"[{kio_id.upper()}] {kio_message}",
                   {"kio": kio_id, "artifact_id": artifact_id, "step": step + 1,
-                   "kio_sequence": new_seq})
+                   "execution_time_ms": execution_time_ms, "kio_sequence": new_seq})
             update: dict = {
                 "last_result": result,
                 "artifacts": [artifact_id],
@@ -175,7 +213,8 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
             "last_kio": kio_id,
         })
         _emit("KIO_DONE", session_id, f"[{kio_id.upper()}] {kio_message}",
-              {"kio": kio_id, "artifact_id": artifact_id, "step": step + 1})
+              {"kio": kio_id, "artifact_id": artifact_id, "step": step + 1,
+               "execution_time_ms": execution_time_ms})
 
         return {"last_result": result, "artifacts": [artifact_id], "feedback": ""}
 
@@ -205,9 +244,12 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
         checkpoint_id: str = checkpoint["checkpoint_id"]
 
         if session_id in active:
-            active[session_id]["status"] = "PENDING_REVIEW"
+            active[session_id]["status"] = "BLOCKED"  # Slide 19: BLOCKED state
             active[session_id]["pending_checkpoint_id"] = checkpoint_id
 
+        _emit("WORKFLOW_BLOCKED", session_id,
+              f"Workflow blocked — awaiting human review",
+              {"kio": kio_id, "checkpoint_id": checkpoint_id})
         _emit("HITL_CHECKPOINT", session_id, f"[HITL] {hitl_q}",
               {"kio": kio_id, "checkpoint_id": checkpoint_id,
                "artifact_id": artifact_id, "hitl_question": hitl_q})
@@ -282,6 +324,12 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
         _emit("WORKFLOW_COMPLETED", session_id,
               f"Workflow COMPLETED — {kio_count}/{kio_count} KIOs done.",
               {"session_id": session_id})
+        # Notify orchestrator state machine
+        try:
+            from .orchestrator_state import get_orchestrator_sm
+            get_orchestrator_sm().workflow_finished()
+        except Exception:
+            pass
         # Release in-process state after completion; durable state lives in PostgreSQL.
         active.pop(session_id, None)
         return {"status": "COMPLETED"}

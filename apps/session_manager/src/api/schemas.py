@@ -34,6 +34,7 @@ class RegisterArtifactRequest(BaseModel):
     artifact_type: str = "json"
     artifact_data: dict[str, Any] = Field(default_factory=dict)
     state: str = "CREATED"
+    parent_artifact_id: str | None = None   # provenance: artifact that produced the input for this one
 
 
 class ArtifactResponse(BaseModel):
@@ -43,6 +44,7 @@ class ArtifactResponse(BaseModel):
     artifact_type: str
     artifact_data: dict[str, Any]
     state: str
+    parent_artifact_id: str | None = None
 
 
 class CreateCheckpointRequest(BaseModel):

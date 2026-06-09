@@ -97,10 +97,20 @@ class WorkflowRunner:
         description: str = "",
         working_directory: str = "",
         initial_context: dict | None = None,
+        timeout_seconds: int | None = None,
     ) -> str:
         """Create a session and start async graph execution. Returns session_id."""
+        import uuid as _uuid
+        from datetime import datetime, timezone, timedelta
+        correlation_id = str(_uuid.uuid4())
+
         session = await self._sm.create_session(owner=owner, workflow_id=workflow_id)
         session_id: str = session["session_id"]
+
+        # Compute deadline for TimeoutMonitor
+        deadline = None
+        if timeout_seconds:
+            deadline = (datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)).isoformat()
 
         self._active[session_id] = {
             "workflow_id": workflow_id,
@@ -114,11 +124,22 @@ class WorkflowRunner:
             "active_kio": None,
             "pending_checkpoint_id": None,
             "artifacts": [],
-            "status": "ACTIVE",
+            "status": "QUEUED",  # Slide 18: initial task state
+            "correlation_id": correlation_id,
+            "deadline": deadline,
+            "timeout_seconds": timeout_seconds,
         }
         self._emit("SESSION_CREATED", session_id,
-                   f"Session {session_id[:8]}… created",
-                   {"workflow_id": workflow_id, "description": description})
+                   f"Session {session_id[:8]}… queued",
+                   {"workflow_id": workflow_id, "description": description,
+                    "status": "QUEUED", "timeout_seconds": timeout_seconds})
+
+        # Notify orchestrator state machine
+        try:
+            from .orchestrator_state import get_orchestrator_sm
+            get_orchestrator_sm().workflow_submitted()
+        except Exception:
+            pass
 
         initial_input = {
             "session_id": session_id,
@@ -132,12 +153,14 @@ class WorkflowRunner:
             "last_result": {},
             "artifacts": [],
             "feedback": "",
-            "status": "ACTIVE",
+            "status": "QUEUED",
             "error": None,
             "pending_checkpoint_id": None,
             "initial_context": initial_context or {},
             "llm_provider_override": "",
             "llm_retry_pending": False,
+            "correlation_id": correlation_id,
+            "timeout_seconds": timeout_seconds,
         }
         config = {"configurable": {"thread_id": session_id}}
         asyncio.create_task(self._run_graph(session_id, initial_input, config))
@@ -162,7 +185,10 @@ class WorkflowRunner:
 
         non_terminal = [
             s for s in all_sessions
-            if s.get("status") in ("ACTIVE", "PENDING_REVIEW")
+            if s.get("status") in (
+                "ACTIVE", "PENDING_REVIEW",
+                "QUEUED", "VALIDATING", "READY", "RUNNING", "BLOCKED",
+            )
         ]
         if not non_terminal:
             logger.info("[rehydrate] No in-flight sessions to restore")
@@ -234,7 +260,7 @@ class WorkflowRunner:
         if not checkpoint_id:
             return None
 
-        state["status"] = "ACTIVE"
+        state["status"] = "RUNNING"
         await self._sm.resolve_checkpoint(
             session_id, checkpoint_id, action="APPROVED", actor=actor, feedback=feedback
         )
@@ -309,6 +335,26 @@ class WorkflowRunner:
                 state["pending_checkpoint_id"] = iv.get("checkpoint_id")
                 break
 
+    async def cancel(self, session_id: str, reason: str = "CANCELLED") -> None:
+        """Cancel an in-flight session (used by TimeoutMonitor and manual cancel)."""
+        state = self._active.get(session_id)
+        if not state:
+            return
+        logger.warning("[{}] Session cancelled: {}", session_id[:8], reason)
+        state["status"] = "FAILED"
+        try:
+            await self._sm.update_status(session_id, "FAILED")
+        except Exception:
+            pass
+        self._emit("WORKFLOW_FAILED", session_id,
+                   f"Workflow {reason}", {"error": reason, "cancelled": True})
+        self._cleanup_session(session_id)
+        try:
+            from .orchestrator_state import get_orchestrator_sm
+            get_orchestrator_sm().workflow_finished()
+        except Exception:
+            pass
+
     async def _handle_failure(self, session_id: str, exc: Exception) -> None:
         logger.exception("Workflow {} failed: {}", session_id, exc)
         state = self._active.get(session_id, {})
@@ -321,6 +367,11 @@ class WorkflowRunner:
                    f"Workflow FAILED: {exc}", {"error": str(exc)})
         # Release in-process state; the durable record lives in PostgreSQL.
         self._cleanup_session(session_id)
+        try:
+            from .orchestrator_state import get_orchestrator_sm
+            get_orchestrator_sm().workflow_finished()
+        except Exception:
+            pass
 
     def _cleanup_session(self, session_id: str) -> None:
         """Remove in-process session state after COMPLETED or FAILED.

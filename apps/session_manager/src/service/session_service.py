@@ -106,14 +106,29 @@ class SessionService:
         artifact_data: dict[str, Any],
         workflow_stage: str = "",
         state: str = "CREATED",
+        parent_artifact_id: str | None = None,
     ) -> dict[str, Any]:
-        """Persist a KIO-produced artifact and return its descriptor dict."""
+        """Persist a KIO-produced artifact and return its descriptor dict.
+
+        parent_artifact_id is stored in the content JSON rather than the ORM FK
+        column because the FK references the DB auto-generated PK, which is not
+        aligned with the KIO-generated artifact_id yet.  Lineage is queryable via
+        content['parent_artifact_id'] until IDs are unified.
+        """
+        content = {
+            "data": artifact_data,
+            "stage": workflow_stage,
+            "state": state,
+            "artifact_id": artifact_id,          # preserve KIO-generated ID
+            "parent_artifact_id": parent_artifact_id,  # provenance lineage
+        }
         async with self._sp.session_scope() as repo:
             artifact = await repo.create_artifact(
                 workflow_id=session_id,
                 artifact_type=artifact_type,
-                content={"data": artifact_data, "stage": workflow_stage, "state": state},
+                content=content,
                 kio_id=producer_kio,
+                # FK parent_artifact_id intentionally omitted — KIO IDs ≠ DB PKs yet
             )
         return {
             "artifact_id": artifact_id,
@@ -122,6 +137,7 @@ class SessionService:
             "artifact_type": artifact_type,
             "artifact_data": artifact_data,
             "state": state,
+            "parent_artifact_id": parent_artifact_id,
         }
 
     async def get_artifacts(self, session_id: str) -> list[dict[str, Any]]:

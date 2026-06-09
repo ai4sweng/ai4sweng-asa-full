@@ -65,6 +65,7 @@ async def register_artifact(session_id: str, req: RegisterArtifactRequest):
         artifact_data=req.artifact_data,
         workflow_stage=req.workflow_stage,
         state=req.state,
+        parent_artifact_id=req.parent_artifact_id,
     )
 
 

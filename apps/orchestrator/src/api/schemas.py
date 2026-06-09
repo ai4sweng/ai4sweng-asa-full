@@ -24,6 +24,11 @@ class RunWorkflowRequest(BaseModel):
     )
     description: str = ""
     working_directory: str = ""
+    timeout_seconds: int | None = Field(
+        default=None,
+        description="Per-workflow deadline in seconds (Slide 8). None = use global timeout.",
+        gt=0,
+    )
 
     @field_validator("workflow_id", mode="after")
     @classmethod
