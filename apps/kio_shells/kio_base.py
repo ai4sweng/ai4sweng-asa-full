@@ -42,8 +42,6 @@ class MessageEnvelope(BaseModel):
 
 HandlerFn = Callable[[MessageEnvelope], Awaitable[dict[str, Any]]]
 
-_HEARTBEAT_INTERVAL = 30   # seconds
-_CAPABILITY_INTERVAL = 60  # seconds — re-announce so orchestrator registry stays fresh
 
 
 async def publish_progress(
@@ -103,10 +101,10 @@ def _make_error(error_code: str, message: str, *, retryable: bool) -> dict[str, 
     }
 
 
-async def _heartbeat_loop(kio_id: str, js) -> None:
-    """Publish a HEARTBEAT message every 30 s so the orchestrator can detect dead agents."""
+async def _heartbeat_loop(kio_id: str, js, interval: int) -> None:
+    """Publish a HEARTBEAT message periodically so the orchestrator can detect dead agents."""
     while True:
-        await asyncio.sleep(_HEARTBEAT_INTERVAL)
+        await asyncio.sleep(interval)
         msg = {
             "message_type": "HEARTBEAT",
             "agent_id": kio_id,
@@ -123,9 +121,9 @@ async def _heartbeat_loop(kio_id: str, js) -> None:
 
 
 async def _capability_loop(
-    kio_id: str, title: str, port: int, supported_tasks: list, js
+    kio_id: str, title: str, port: int, supported_tasks: list, js, interval: int
 ) -> None:
-    """Publish CAPABILITY_ANNOUNCEMENT on startup then every 60 s.
+    """Publish CAPABILITY_ANNOUNCEMENT on startup then periodically.
 
     The orchestrator AgentRegistry subscribes to kio.*.capability and uses
     the announced host/port for HTTP transport, eliminating the need to
@@ -156,7 +154,7 @@ async def _capability_loop(
                 logger.debug("[{}] Capability announce failed: {}", kio_id, exc)
         else:
             logger.debug("[{}] CAPABILITY_ANNOUNCEMENT (no NATS) {}:{}", kio_id, host, port)
-        await asyncio.sleep(_CAPABILITY_INTERVAL)
+        await asyncio.sleep(interval)
 
 
 def make_kio_app(
@@ -205,8 +203,8 @@ def make_kio_app(
             except Exception as exc:
                 logger.warning("[{}] NATS unavailable — HTTP only ({})", kio_id, exc)
 
-        hb_task = asyncio.create_task(_heartbeat_loop(kio_id, js))
-        cap_task = asyncio.create_task(_capability_loop(kio_id, title, port, _tasks, js))
+        hb_task = asyncio.create_task(_heartbeat_loop(kio_id, js, cfg.kio_heartbeat_interval))
+        cap_task = asyncio.create_task(_capability_loop(kio_id, title, port, _tasks, js, cfg.kio_capability_interval))
         yield
 
         for task in (hb_task, cap_task):

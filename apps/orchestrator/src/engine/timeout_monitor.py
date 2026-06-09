@@ -16,8 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from loguru import logger
-
-_POLL_INTERVAL = 5  # seconds between sweeps
+from shared.config import get_settings
 
 
 class TimeoutMonitor:
@@ -35,16 +34,17 @@ class TimeoutMonitor:
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop())
-        logger.info("[timeout_monitor] started (poll every {}s)", _POLL_INTERVAL)
+        logger.info("[timeout_monitor] started (poll every {}s)", get_settings().timeout_monitor_interval)
 
     def stop(self) -> None:
         if self._task and not self._task.done():
             self._task.cancel()
 
     async def _loop(self) -> None:
+        interval = get_settings().timeout_monitor_interval
         while True:
             try:
-                await asyncio.sleep(_POLL_INTERVAL)
+                await asyncio.sleep(interval)
                 await self._sweep()
             except asyncio.CancelledError:
                 break

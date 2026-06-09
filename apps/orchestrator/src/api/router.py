@@ -34,10 +34,6 @@ router = APIRouter(
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
-# Maximum concurrent ACTIVE sessions per user (basic DoS protection)
-_MAX_ACTIVE_PER_USER = 20
-
-
 def _validate_uuid(value: str, field: str) -> str:
     if value and not _UUID_RE.match(value.lower()):
         raise HTTPException(status_code=422, detail=f"{field} must be a valid UUID v4")
@@ -45,14 +41,16 @@ def _validate_uuid(value: str, field: str) -> str:
 
 
 def _check_rate_limit(runner, username: str) -> None:
+    from shared.config import get_settings
+    limit = get_settings().max_active_sessions_per_user
     active_count = sum(
         1 for s in runner._active.values()
         if s.get("owner") == username and s.get("status") == "ACTIVE"
     )
-    if active_count >= _MAX_ACTIVE_PER_USER:
+    if active_count >= limit:
         raise HTTPException(
             status_code=429,
-            detail=f"Too many active sessions ({active_count}/{_MAX_ACTIVE_PER_USER}). "
+            detail=f"Too many active sessions ({active_count}/{limit}). "
                    "Wait for existing workflows to complete.",
         )
 

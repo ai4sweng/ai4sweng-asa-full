@@ -49,8 +49,8 @@ class JetStreamManager:
         cfg = get_settings()
         self._nc = await nats.connect(
             cfg.nats_url,
-            reconnect_time_wait=2,
-            max_reconnect_attempts=10,
+            reconnect_time_wait=cfg.nats_reconnect_wait,
+            max_reconnect_attempts=cfg.nats_max_reconnect_attempts,
         )
         self._js = self._nc.jetstream()
         await self._ensure_stream(cfg.nats_kio_stream)
@@ -67,7 +67,7 @@ class JetStreamManager:
                 subjects=["kio.*.request"],
                 retention=RetentionPolicy.WORK_QUEUE,
                 storage=StorageType.FILE,
-                max_age=3600,  # 1 hour in seconds (nats-py 2.x uses seconds)
+                max_age=cfg.nats_stream_max_age,
                 # Note: max_deliver and ack_wait are consumer properties, not stream properties.
                 # They are set when consumers subscribe via subscribe_requests().
             )
@@ -137,7 +137,7 @@ class JetStreamManager:
         ``await nats_msg.ack()`` after successful processing.
 
         Consumer properties:
-          max_deliver=3  — retry up to 3× if the KIO crashes before acking
+          max_deliver=cfg.nats_max_deliver  — retry N× if the KIO crashes before acking
           ack_wait=300s  — matches kio_client_timeout so we never wait longer
         """
         if self._js is None:
@@ -151,18 +151,18 @@ class JetStreamManager:
             f"kio.{kio_id}.request",
             durable=durable,
             config=nats.js.api.ConsumerConfig(
-                max_deliver=3,
+                max_deliver=cfg.nats_max_deliver,
                 ack_wait=ack_wait_s,
                 filter_subject=f"kio.{kio_id}.request",
             ),
         )
-        logger.info("[{}] JetStream pull consumer '{}' active (max_deliver=3 ack_wait={}s)",
-                    kio_id, durable, ack_wait_s)
+        logger.info("[{}] JetStream pull consumer '{}' active (max_deliver={} ack_wait={}s)",
+                    kio_id, durable, cfg.nats_max_deliver, ack_wait_s)
 
         async def _poll_loop() -> None:
             while True:
                 try:
-                    msgs = await psub.fetch(batch=1, timeout=2.0)
+                    msgs = await psub.fetch(batch=1, timeout=cfg.nats_fetch_timeout)
                     for msg in msgs:
                         asyncio.create_task(_dispatch(msg))
                 except (nats.js.errors.FetchTimeoutError, nats.errors.TimeoutError):

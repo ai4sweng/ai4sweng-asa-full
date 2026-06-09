@@ -7,12 +7,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
-# Max events buffered per subscriber before back-pressure kicks in.
-_QUEUE_MAXSIZE = 256
-
-# Sentinel pushed into the queue every N seconds so the generator wakes up
-# and FastAPI can detect a disconnected client (via GeneratorExit / CancelledError).
-_HEARTBEAT_INTERVAL = 15  # seconds
 
 
 @dataclass
@@ -69,15 +63,17 @@ class EventBus:
             When set, only events belonging to this user are yielded.
             Pass ``None`` (or omit) to receive all events (admin/debug use).
 
-        A heartbeat is sent every ``_HEARTBEAT_INTERVAL`` seconds so that
+        A heartbeat is sent every ``sse_heartbeat_interval`` seconds (from config) so that
         FastAPI's StreamingResponse can detect disconnected browsers promptly
         rather than holding a zombie queue entry indefinitely.
         """
-        q: asyncio.Queue[WorkflowEvent | None] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
+        from shared.config import get_settings
+        cfg = get_settings()
+        q: asyncio.Queue[WorkflowEvent | None] = asyncio.Queue(maxsize=cfg.sse_queue_maxsize)
 
         async def _heartbeat() -> None:
             while True:
-                await asyncio.sleep(_HEARTBEAT_INTERVAL)
+                await asyncio.sleep(cfg.sse_heartbeat_interval)
                 try:
                     q.put_nowait(None)  # None sentinel = keepalive
                 except asyncio.QueueFull:

@@ -145,10 +145,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Allow the React dashboard (localhost:5173) to call the API
+_cfg = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=_cfg.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

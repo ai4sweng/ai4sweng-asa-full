@@ -255,7 +255,6 @@ class ErrorCode(StrEnum):
 DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_BASE_DELAY_SEC: float = 1.0
 DEFAULT_TASK_TIMEOUT_SEC: float = 120.0
-DEFAULT_HEARTBEAT_INTERVAL_SEC: float = 30.0
 
 # ---------------------------------------------------------------------------
 # Langfuse Span Names

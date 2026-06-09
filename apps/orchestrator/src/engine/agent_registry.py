@@ -11,8 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from loguru import logger
-
-_STALE_THRESHOLD = 90  # seconds without announcement → endpoint treated as stale
+from shared.config import get_settings
 
 
 class AgentRegistry:
@@ -92,7 +91,7 @@ class AgentRegistry:
         try:
             last_seen = datetime.fromisoformat(agent["last_seen"])
             age = (datetime.now(timezone.utc) - last_seen).total_seconds()
-            if age > _STALE_THRESHOLD:
+            if age > get_settings().agent_stale_threshold:
                 logger.warning(
                     "[agent_registry] {} last seen {:.0f}s ago — endpoint stale, using config fallback",
                     kio_id, age,
@@ -127,7 +126,7 @@ class AgentRegistry:
             try:
                 last_seen = datetime.fromisoformat(agent["last_seen"])
                 age = (now - last_seen).total_seconds()
-                alive = age <= _STALE_THRESHOLD
+                alive = age <= get_settings().agent_stale_threshold
             except Exception:
                 age = -1
                 alive = False

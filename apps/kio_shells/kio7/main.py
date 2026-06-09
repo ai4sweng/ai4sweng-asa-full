@@ -92,12 +92,13 @@ def _run_pytest(workspace: str) -> dict:
         "SECRET_KEY": "test-secret-key-for-ci",
         "JWT_SECRET_KEY": "test-secret-key-for-ci",
     }
+    from shared.config import get_settings as _cfg
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "tests/", "-v", "--tb=short", "-q"],
         cwd=workspace,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=_cfg().kio_subprocess_pip_timeout,
         env=env,
     )
     stdout = result.stdout or ""
@@ -146,9 +147,10 @@ def _collect_only(workspace: str) -> str:
         "SECRET_KEY": "test-secret-key-for-ci",
         "JWT_SECRET_KEY": "test-secret-key-for-ci",
     }
+    from shared.config import get_settings as _cfg
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "tests/", "--collect-only", "-q"],
-        cwd=workspace, capture_output=True, text=True, timeout=30, env=env,
+        cwd=workspace, capture_output=True, text=True, timeout=_cfg().kio_subprocess_test_timeout, env=env,
     )
     if result.returncode not in (0, 5):   # 5 = no tests collected (ok)
         return (result.stderr or result.stdout or "collection failed")[-600:]
