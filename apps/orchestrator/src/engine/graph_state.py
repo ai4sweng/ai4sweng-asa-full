@@ -42,3 +42,4 @@ class WorkflowGraphState(TypedDict):
 
     # --- Task config ---
     timeout_seconds: int | None  # per-task deadline; None = use global kio_client_timeout
+    priority: int                # dispatch priority 1 (lowest) … 10 (highest); default 5

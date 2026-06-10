@@ -98,6 +98,7 @@ class WorkflowRunner:
         working_directory: str = "",
         initial_context: dict | None = None,
         timeout_seconds: int | None = None,
+        priority: int = 5,
     ) -> str:
         """Create a session and start async graph execution. Returns session_id."""
         import uuid as _uuid
@@ -128,6 +129,7 @@ class WorkflowRunner:
             "correlation_id": correlation_id,
             "deadline": deadline,
             "timeout_seconds": timeout_seconds,
+            "priority": priority,
         }
         self._emit("SESSION_CREATED", session_id,
                    f"Session {session_id[:8]}… queued",
@@ -161,6 +163,7 @@ class WorkflowRunner:
             "llm_retry_pending": False,
             "correlation_id": correlation_id,
             "timeout_seconds": timeout_seconds,
+            "priority": priority,
         }
         config = {"configurable": {"thread_id": session_id}}
         asyncio.create_task(self._run_graph(session_id, initial_input, config))

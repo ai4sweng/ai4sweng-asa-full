@@ -104,6 +104,11 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
         last_artifact = (
             state.get("last_result", {}).get("payload", {}).get("artifact_data", {})
         )
+        # Phase 10.3: typed artifact references for all upstream outputs
+        input_artifacts = [
+            {"artifact_id": aid, "artifact_type": "json"}
+            for aid in state.get("artifacts", [])
+        ]
         step_id = f"step_{step + 1}_{kio_id}"
         correlation_id = state.get("correlation_id", "")
         parent_artifact_id = state["artifacts"][-1] if state.get("artifacts") else None
@@ -132,12 +137,16 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
                         "description": state["description"],
                         "working_directory": state["working_directory"],
                         "feedback": state.get("feedback", ""),
-                        "last_artifact": last_artifact,
+                        "last_artifact": last_artifact,         # backward compat
+                        "input_artifacts": input_artifacts,     # Phase 10.3: typed refs
                         "initial_context": state.get("initial_context", {}),
                         "llm_provider_override": state.get("llm_provider_override", ""),
                         "retry_policy": retry_policy,
                         "timeout_seconds": state.get("timeout_seconds"),  # per-task (Slide 8)
                         "step_id": step_id,
+                        "task_id": step_id,                     # Phase 10.1: explicit task_id
+                        "priority": state.get("priority", 5),   # Phase 10.2: dispatch priority
+                        "expected_outputs": ["artifact"],        # Phase 10.4
                     },
                     correlation_id=correlation_id,
                     step_id=step_id,
