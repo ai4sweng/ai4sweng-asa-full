@@ -6,6 +6,7 @@ so kio5 can access them without needing the full artifact chain.
 
 Uses markdown code-block output (not JSON) to work reliably with small LLMs.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -129,12 +130,18 @@ async def handler(envelope: MessageEnvelope) -> dict:
     _js = None
     try:
         from shared.messaging.jetstream import get_jetstream
+
         _js = await get_jetstream()
     except Exception:
         pass
 
-    await publish_progress(KIO_ID, envelope.session_id, 10,
-                           f"Preparing test generation for {len(findings)} finding(s)", _js)
+    await publish_progress(
+        KIO_ID,
+        envelope.session_id,
+        10,
+        f"Preparing test generation for {len(findings)} finding(s)",
+        _js,
+    )
 
     files = []
     summary = f"Test generation for {len(findings)} finding(s)"
@@ -149,11 +156,11 @@ async def handler(envelope: MessageEnvelope) -> dict:
             "Generate pytest test files using the ### heading + code block format."
         )
 
-        await publish_progress(KIO_ID, envelope.session_id, 40,
-                               "Sending prompt to LLM…", _js)
+        await publish_progress(KIO_ID, envelope.session_id, 40, "Sending prompt to LLM…", _js)
         response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
-        await publish_progress(KIO_ID, envelope.session_id, 70,
-                               "Parsing generated test files…", _js)
+        await publish_progress(
+            KIO_ID, envelope.session_id, 70, "Parsing generated test files…", _js
+        )
         files = _parse_code_files(response.content)
 
         if not files:

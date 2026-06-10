@@ -12,9 +12,9 @@ Built-in tools (auto-registered on first ``get_registry()`` call):
 
 Custom tools can be registered at any time with ``registry.register()``.
 """
+
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Awaitable, Callable
 
 ToolFn = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -42,6 +42,7 @@ class MCPTool:
             text = result
         else:
             import json
+
             text = json.dumps(result, ensure_ascii=False, indent=2)
         return {"content": [{"type": "text", "text": text}]}
 

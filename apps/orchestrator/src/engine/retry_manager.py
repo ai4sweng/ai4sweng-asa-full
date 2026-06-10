@@ -15,17 +15,18 @@ Integration
   RetryManager.should_retry(session_id, ...) and, if True, sleeps the backoff
   delay before re-raising (causing LangGraph to re-invoke the node).
 """
+
 from __future__ import annotations
 
 import asyncio
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
 
-_BASE_DELAY: float = 1.0   # seconds — first retry delay for linear strategy
-_MAX_DELAY: float = 60.0   # seconds — cap on any single backoff sleep
+_BASE_DELAY: float = 1.0  # seconds — first retry delay for linear strategy
+_MAX_DELAY: float = 60.0  # seconds — cap on any single backoff sleep
 
 
 @dataclass
@@ -85,7 +86,10 @@ class RetryManager:
         delay = self._backoff(rs.attempts, rs.backoff_strategy)
         logger.info(
             "[retry_manager] session={} attempt={}/{} backoff={:.1f}s",
-            session_id[:8], rs.attempts, rs.max_retries, delay,
+            session_id[:8],
+            rs.attempts,
+            rs.max_retries,
+            delay,
         )
         await asyncio.sleep(delay)
         return rs.attempts

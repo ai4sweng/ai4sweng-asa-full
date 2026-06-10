@@ -11,6 +11,7 @@ Key properties:
 • interrupt() in hitl_node suspends execution; resumed via Command(resume=feedback).
 • All service clients are captured as closures so the graph is fully self-contained.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -48,6 +49,7 @@ def build_workflow_graph(
     """
     if checkpointer is None:
         from langgraph.checkpoint.memory import MemorySaver
+
         checkpointer = MemorySaver()
 
     nodes = make_nodes(sm, kio, lm, bus, active)

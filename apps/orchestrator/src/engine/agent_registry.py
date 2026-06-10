@@ -4,6 +4,7 @@ KIOs publish their host/port/capabilities on startup and every 60 s.
 KioClient queries this registry before falling back to the static kio_port_map,
 so new KIOs are discovered without any config change.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -65,6 +66,7 @@ class AgentRegistry:
             # Notify orchestrator SM: new or recovered agent
             try:
                 from .orchestrator_state import get_orchestrator_sm
+
                 get_orchestrator_sm().agent_registered(kio_id)
             except Exception:
                 pass
@@ -73,6 +75,7 @@ class AgentRegistry:
             # Re-announcement also counts as alive (recovery from stale)
             try:
                 from .orchestrator_state import get_orchestrator_sm
+
                 sm = get_orchestrator_sm()
                 sm.agent_registered(kio_id)
                 sm.agent_recovered(kio_id)
@@ -94,13 +97,15 @@ class AgentRegistry:
             if age > get_settings().agent_stale_threshold:
                 logger.warning(
                     "[agent_registry] {} last seen {:.0f}s ago — endpoint stale, using config fallback",
-                    kio_id, age,
+                    kio_id,
+                    age,
                 )
                 # Notify orchestrator SM of agent failure
                 if not agent.get("_stale_notified"):
                     agent["_stale_notified"] = True
                     try:
                         from .orchestrator_state import get_orchestrator_sm
+
                         get_orchestrator_sm().agent_failure_detected(kio_id)
                     except Exception:
                         pass

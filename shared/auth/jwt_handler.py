@@ -1,4 +1,5 @@
 """JWT creation and decoding using PyJWT + shared.config settings."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone

@@ -4,6 +4,7 @@ Analyses code and ML models for energy efficiency issues and recommends
 TinyML optimisation techniques: quantisation, pruning, knowledge distillation,
 and hardware-specific deployment strategies for edge/embedded targets.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -107,9 +108,7 @@ async def _build_repo_context(repo_path: str) -> str:
     cfg = get_settings()
     builder = RepoContextBuilder(str(abs_path))
     inventory = builder.build_inventory()
-    rel_paths = builder.select_analysis_files(
-        inventory, max_files=cfg.repo_analysis_max_files
-    )
+    rel_paths = builder.select_analysis_files(inventory, max_files=cfg.repo_analysis_max_files)
     parts = []
     for rel_path in rel_paths:
         ctx = builder.read_file_context(rel_path)
@@ -133,15 +132,14 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
         await publish_progress(KIO_ID, envelope.session_id, 35, "Analysing energy profile", js)
 
-        user_prompt = (
-            f"Task: {description}\n"
-            f"Repository: {repo_path or '(not specified)'}\n\n"
-        )
+        user_prompt = f"Task: {description}\nRepository: {repo_path or '(not specified)'}\n\n"
         if repo_context:
             user_prompt += f"Source code:\n{repo_context}\n\n"
         user_prompt += "Produce a TinyML energy efficiency analysis and recommendations."
 
-        await publish_progress(KIO_ID, envelope.session_id, 55, "LLM generating recommendations", js)
+        await publish_progress(
+            KIO_ID, envelope.session_id, 55, "LLM generating recommendations", js
+        )
         response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
         raw = _strip_fences(response.content)
 
@@ -158,8 +156,9 @@ async def handler(envelope: MessageEnvelope) -> dict:
             }
 
         rec_count = len(result.get("recommendations", []))
-        await publish_progress(KIO_ID, envelope.session_id, 90,
-                               f"{rec_count} recommendation(s) generated", js)
+        await publish_progress(
+            KIO_ID, envelope.session_id, 90, f"{rec_count} recommendation(s) generated", js
+        )
         logger.info("[kio10] {} recommendation(s) produced", rec_count)
 
         return {
@@ -175,9 +174,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
                 "confidence": result.get("confidence", 1.0),
                 "produced_at": datetime.now(timezone.utc).isoformat(),
             },
-            "message": (
-                f"Energy analysis complete — {rec_count} optimisation recommendation(s)."
-            ),
+            "message": (f"Energy analysis complete — {rec_count} optimisation recommendation(s)."),
         }
 
     except Exception as exc:

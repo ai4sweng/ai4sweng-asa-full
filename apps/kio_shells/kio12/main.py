@@ -4,6 +4,7 @@ Scans source code for vulnerabilities (OWASP Top 10, injection, broken auth,
 MLS policy gaps) and generates hardened replacement files with security
 controls, input validation, and audit logging applied.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -78,9 +79,7 @@ async def _build_repo_context(repo_path: str) -> str:
     cfg = get_settings()
     builder = RepoContextBuilder(str(abs_path))
     inventory = builder.build_inventory()
-    rel_paths = builder.select_analysis_files(
-        inventory, max_files=cfg.repo_analysis_max_files
-    )
+    rel_paths = builder.select_analysis_files(inventory, max_files=cfg.repo_analysis_max_files)
     parts = []
     for rel_path in rel_paths:
         ctx = builder.read_file_context(rel_path)
@@ -98,12 +97,12 @@ async def handler(envelope: MessageEnvelope) -> dict:
     _js = None
     try:
         from shared.messaging.jetstream import get_jetstream
+
         _js = await get_jetstream()
     except Exception:
         pass
 
-    await publish_progress(KIO_ID, envelope.session_id, 10,
-                           "Starting OWASP security audit…", _js)
+    await publish_progress(KIO_ID, envelope.session_id, 10, "Starting OWASP security audit…", _js)
 
     try:
         llm_override = payload.get("llm_provider_override", "")
@@ -111,12 +110,19 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
         if inline_code:
             repo_context = f"## inline_code.py\n```\n{inline_code[:6000]}\n```"
-            logger.info("[kio12] Using inline code ({} chars) — skipping repo scan", len(inline_code))
+            logger.info(
+                "[kio12] Using inline code ({} chars) — skipping repo scan", len(inline_code)
+            )
         else:
             repo_context = await _build_repo_context(repo_path)
 
-        await publish_progress(KIO_ID, envelope.session_id, 35,
-                               "Scanning source for OWASP Top 10 vulnerabilities…", _js)
+        await publish_progress(
+            KIO_ID,
+            envelope.session_id,
+            35,
+            "Scanning source for OWASP Top 10 vulnerabilities…",
+            _js,
+        )
 
         user_prompt = (
             f"Security objective: {description}\n\n"
@@ -124,11 +130,13 @@ async def handler(envelope: MessageEnvelope) -> dict:
             "Identify all vulnerabilities and generate hardened replacement files as JSON."
         )
 
-        await publish_progress(KIO_ID, envelope.session_id, 55,
-                               "Generating hardened code with LLM…", _js)
+        await publish_progress(
+            KIO_ID, envelope.session_id, 55, "Generating hardened code with LLM…", _js
+        )
         response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
-        await publish_progress(KIO_ID, envelope.session_id, 85,
-                               "Parsing vulnerability report…", _js)
+        await publish_progress(
+            KIO_ID, envelope.session_id, 85, "Parsing vulnerability report…", _js
+        )
         raw = _strip_fences(response.content)
 
         try:
@@ -138,7 +146,11 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
         vulns = result.get("vulnerabilities", [])
         files = result.get("files", [])
-        logger.info("[kio12] Found {} vulnerability/ies, generated {} hardened file(s)", len(vulns), len(files))
+        logger.info(
+            "[kio12] Found {} vulnerability/ies, generated {} hardened file(s)",
+            len(vulns),
+            len(files),
+        )
         return {
             "status": "DONE",
             "artifact_id": str(uuid.uuid4()),

@@ -6,6 +6,7 @@ reasoning for each stage.
 
 Pipeline: kio2 → (LLM-selected stages) → kio8
 """
+
 from __future__ import annotations
 
 import asyncio

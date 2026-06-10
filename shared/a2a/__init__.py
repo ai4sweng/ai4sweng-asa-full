@@ -8,6 +8,7 @@ Typical use-case: kio3 (repo scanner) completing its analysis and directly
 dispatching findings to kio5 (bug detector) as a sub-task, then returning
 a combined artifact to the orchestrator.
 """
+
 from shared.a2a.client import A2AClient, get_a2a_client
 
 __all__ = ["A2AClient", "get_a2a_client"]

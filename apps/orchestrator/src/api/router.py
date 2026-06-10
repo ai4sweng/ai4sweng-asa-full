@@ -4,6 +4,7 @@ All /workflow/* endpoints require a valid Bearer JWT (issued by POST /auth/login
 The SSE stream (/workflow/events) is also protected: events are filtered so each
 authenticated user only receives their own session events.
 """
+
 from __future__ import annotations
 
 import re
@@ -35,6 +36,7 @@ router = APIRouter(
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
+
 def _validate_uuid(value: str, field: str) -> str:
     if value and not _UUID_RE.match(value.lower()):
         raise HTTPException(status_code=422, detail=f"{field} must be a valid UUID v4")
@@ -43,16 +45,18 @@ def _validate_uuid(value: str, field: str) -> str:
 
 def _check_rate_limit(runner, username: str) -> None:
     from shared.config import get_settings
+
     limit = get_settings().max_active_sessions_per_user
     active_count = sum(
-        1 for s in runner._active.values()
+        1
+        for s in runner._active.values()
         if s.get("owner") == username and s.get("status") == "ACTIVE"
     )
     if active_count >= limit:
         raise HTTPException(
             status_code=429,
             detail=f"Too many active sessions ({active_count}/{limit}). "
-                   "Wait for existing workflows to complete.",
+            "Wait for existing workflows to complete.",
         )
 
 
@@ -109,8 +113,8 @@ async def run_prompt_workflow(
     }
     session_id = await runner.run(
         workflow_id=str(uuid.uuid4()),
-        kio_sequence=["kio1"],          # kio1 will expand this dynamically
-        hitl_after=None,                # kio1 sets hitl_after in its response
+        kio_sequence=["kio1"],  # kio1 will expand this dynamically
+        hitl_after=None,  # kio1 sets hitl_after in its response
         owner=current_user.username,
         description=req.prompt,
         working_directory=req.working_directory,
@@ -176,8 +180,9 @@ async def get_workflow_status(
 
 
 @router.post("/{session_id}/approve", response_model=ApproveResponse)
-async def approve_hitl(session_id: str, req: ApproveRequest,
-                       current_user: UserInfo = Depends(get_current_user)):
+async def approve_hitl(
+    session_id: str, req: ApproveRequest, current_user: UserInfo = Depends(get_current_user)
+):
     """Resolve the pending HITL checkpoint and resume the LangGraph execution.
 
     Returns 409 if there is no outstanding checkpoint.  The graph is resumed

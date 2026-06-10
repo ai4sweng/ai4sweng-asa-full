@@ -92,11 +92,7 @@ def repo_finding_to_bug_entry(finding: dict[str, Any], *, index: int) -> dict[st
         line_part = finding.get("line", 0)
         bug_id = f"FALLBACK-{file_part}-{line_part}-{index}"
 
-    raw_kind = (
-        finding.get("kind")
-        or finding.get("category")
-        or "OTHER"
-    )
+    raw_kind = finding.get("kind") or finding.get("category") or "OTHER"
 
     evidence = finding.get("evidence") or finding.get("snippet", "")
     if isinstance(evidence, list):
@@ -150,7 +146,7 @@ HARDCODED_FALLBACK_BUGS: list[dict[str, Any]] = [
             "line": 59,
             "severity": "critical",
             "description": "search_users_by_name interpolates query into SQL",
-            "evidence": "f\"SELECT",
+            "evidence": 'f"SELECT',
             "recommended_fix": "Use parameterized query",
         }
     ),

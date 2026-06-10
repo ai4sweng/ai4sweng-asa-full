@@ -1,4 +1,5 @@
 """FastAPI dependency that validates Bearer JWTs on protected endpoints."""
+
 from __future__ import annotations
 
 import jwt

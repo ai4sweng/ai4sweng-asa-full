@@ -5,6 +5,7 @@ original repository, then generates corrected source files for each bug.
 
 Uses markdown code-block output (not JSON) to work reliably with small LLMs.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -106,7 +107,9 @@ def _resolve_repo(working_directory: str) -> str | None:
 async def _read_buggy_files(repo_path: str, bugs: list[dict]) -> str:
     resolved = _resolve_repo(repo_path)
     if not resolved:
-        logger.warning("[kio6] Repo not found for path '{}' — LLM will patch without source context", repo_path)
+        logger.warning(
+            "[kio6] Repo not found for path '{}' — LLM will patch without source context", repo_path
+        )
         return ""
     logger.info("[kio6] Reading source from: {}", resolved)
     bug_files = {b.get("file", "") for b in bugs if b.get("file")}
@@ -117,8 +120,10 @@ async def _read_buggy_files(repo_path: str, bugs: list[dict]) -> str:
     )
     parts = []
     for rel_path in rel_paths:
-        if any(rel_path.endswith(bf.lstrip("/")) or bf.endswith(rel_path) for bf in bug_files) \
-                or not bug_files:
+        if (
+            any(rel_path.endswith(bf.lstrip("/")) or bf.endswith(rel_path) for bf in bug_files)
+            or not bug_files
+        ):
             ctx = builder.read_file_context(rel_path)
             parts.append(f"### {rel_path}\n```python\n{ctx.content}\n```")
     return "\n\n".join(parts) if parts else ""
@@ -137,12 +142,14 @@ async def handler(envelope: MessageEnvelope) -> dict:
     _js = None
     try:
         from shared.messaging.jetstream import get_jetstream
+
         _js = await get_jetstream()
     except Exception:
         pass
 
-    await publish_progress(KIO_ID, envelope.session_id, 10,
-                           f"Reading source files for {len(bugs)} bug(s)…", _js)
+    await publish_progress(
+        KIO_ID, envelope.session_id, 10, f"Reading source files for {len(bugs)} bug(s)…", _js
+    )
 
     patches = []
     summary = ""
@@ -162,8 +169,13 @@ async def handler(envelope: MessageEnvelope) -> dict:
             "Generate corrected files using the ### heading + code block format."
         )
 
-        await publish_progress(KIO_ID, envelope.session_id, 40,
-                               "Sending bugs + source to LLM for patch generation…", _js)
+        await publish_progress(
+            KIO_ID,
+            envelope.session_id,
+            40,
+            "Sending bugs + source to LLM for patch generation…",
+            _js,
+        )
         response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
         await publish_progress(KIO_ID, envelope.session_id, 75, "Parsing patches…", _js)
         patches = _parse_code_files(response.content)

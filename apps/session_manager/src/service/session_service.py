@@ -1,4 +1,5 @@
 """PostgreSQL-backed session service — replaces the in-memory dict from EnisAi4sweng."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -6,7 +7,7 @@ from typing import Any
 from loguru import logger
 from sqlalchemy.exc import IntegrityError
 
-from shared.constants import TaskState, WorkflowState
+from shared.constants import WorkflowState
 from shared.persistence.session_provider import SessionProvider
 from shared.storage import get_artifact_store
 
@@ -128,11 +129,13 @@ class SessionService:
         if store.enabled:
             try:
                 s3_key = await store.put(artifact_id, session_id, artifact_data)
-                stored_data = {}   # don't duplicate payload in DB
+                stored_data = {}  # don't duplicate payload in DB
                 logger.debug("[session_svc] artifact {} offloaded to s3://{}", artifact_id, s3_key)
             except Exception as exc:
                 logger.warning(
-                    "[session_svc] S3 upload failed for {} — falling back to DB: {}", artifact_id, exc
+                    "[session_svc] S3 upload failed for {} — falling back to DB: {}",
+                    artifact_id,
+                    exc,
                 )
 
         content = {
@@ -169,17 +172,19 @@ class SessionService:
         result = []
         for a in artifacts:
             data = await self._resolve_artifact_data(a)
-            result.append({
-                "artifact_id": a.id,
-                "session_id": session_id,
-                "producer_kio": a.kio_id or "",
-                "artifact_type": a.artifact_type,
-                "artifact_data": data,
-                "state": (a.content or {}).get("state", "CREATED"),
-                "parent_artifact_id": a.parent_artifact_id,
-                "s3_key": a.s3_key,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-            })
+            result.append(
+                {
+                    "artifact_id": a.id,
+                    "session_id": session_id,
+                    "producer_kio": a.kio_id or "",
+                    "artifact_type": a.artifact_type,
+                    "artifact_data": data,
+                    "state": (a.content or {}).get("state", "CREATED"),
+                    "parent_artifact_id": a.parent_artifact_id,
+                    "s3_key": a.s3_key,
+                    "created_at": a.created_at.isoformat() if a.created_at else None,
+                }
+            )
         return result
 
     async def get_artifact(self, artifact_id: str) -> dict[str, Any] | None:
@@ -209,7 +214,9 @@ class SessionService:
             except Exception as exc:
                 logger.warning(
                     "[session_svc] S3 fetch failed for {} ({}): {} — using DB fallback",
-                    a.id, a.s3_key, exc,
+                    a.id,
+                    a.s3_key,
+                    exc,
                 )
         return (a.content or {}).get("data", {})
 
@@ -250,7 +257,9 @@ class SessionService:
                         "requested_by": requested_by,
                     },
                 )
-                await repo.update_workflow_state(session_id, WorkflowState.WAITING_FOR_HUMAN_APPROVAL)
+                await repo.update_workflow_state(
+                    session_id, WorkflowState.WAITING_FOR_HUMAN_APPROVAL
+                )
             logger.warning("HITL checkpoint {} at step '{}'", approval.id, workflow_step)
             return {
                 "checkpoint_id": approval.id,
@@ -271,7 +280,9 @@ class SessionService:
                 approval = next((a for a in approvals if a.task_id == task.id), None)
                 if approval is None:
                     raise
-            logger.info("Reusing existing HITL checkpoint {} for step '{}'", approval.id, workflow_step)
+            logger.info(
+                "Reusing existing HITL checkpoint {} for step '{}'", approval.id, workflow_step
+            )
             return {
                 "checkpoint_id": approval.id,
                 "session_id": session_id,
@@ -299,9 +310,7 @@ class SessionService:
             )
             if not approval:
                 return None
-            new_state = (
-                WorkflowState.RUNNING if action == "APPROVED" else WorkflowState.FAILED
-            )
+            new_state = WorkflowState.RUNNING if action == "APPROVED" else WorkflowState.FAILED
             await repo.update_workflow_state(session_id, new_state)
         logger.info("Checkpoint {} resolved → {} by {}", checkpoint_id, action, actor)
         return {

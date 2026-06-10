@@ -8,7 +8,6 @@ asyncio tasks each see their own (workflow_id, task_id) without stomping each ot
 import logging
 import time
 from contextvars import ContextVar
-from typing import Any
 
 from shared.llm.base import BaseLLMProvider, LLMResponse
 from shared.llm.bug_detector_llm import (
@@ -139,9 +138,7 @@ class ObservedLLMProvider(BaseLLMProvider):
                         },
                         output={
                             "raw_preview": result.raw_response.content[:2000],
-                            "parsed_findings": [
-                                f.model_dump() for f in result.findings
-                            ],
+                            "parsed_findings": [f.model_dump() for f in result.findings],
                         },
                     )
                 except Exception:

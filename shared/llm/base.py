@@ -5,8 +5,14 @@ All agents depend only on BaseLLMProvider so providers can be swapped
 without changing agent code.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from shared.llm.repo_file_analyzer import FileAnalysisResult, FileContext
 
 
 @dataclass

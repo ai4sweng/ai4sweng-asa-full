@@ -4,6 +4,7 @@ Run from the EnisAliMerge root with PYTHONPATH set:
     PYTHONPATH=. uvicorn apps.lm_engine.main:app --port 8001
 Or via run_all.sh which sets PYTHONPATH automatically.
 """
+
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -39,10 +40,12 @@ async def health():
 
 
 from src.api.router import router as llm_router  # noqa: E402
+
 app.include_router(llm_router)
 
 
 if __name__ == "__main__":
     import uvicorn
+
     cfg = get_settings()
     uvicorn.run("main:app", host=cfg.api_host, port=cfg.lm_engine_port, reload=False)

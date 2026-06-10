@@ -42,9 +42,7 @@ async def build_execution_summary(
     workflow_metrics = by_task.pop(None, {})
     total_latency_ms = workflow_metrics.get("total_workflow_latency_ms")
     if total_latency_ms is None and workflow.started_at and workflow.completed_at:
-        total_latency_ms = (
-            workflow.completed_at - workflow.started_at
-        ).total_seconds() * 1000
+        total_latency_ms = (workflow.completed_at - workflow.started_at).total_seconds() * 1000
     if replay_report and replay_report.get("workflow", {}).get("total_workflow_latency_ms"):
         total_latency_ms = replay_report["workflow"]["total_workflow_latency_ms"]
 
@@ -137,8 +135,10 @@ def print_execution_summary(summary: dict[str, Any], *, workflow_label: str) -> 
     print("=" * 72)
     print("\nTotals:")
     print(f"  Latency:      {totals['latency_ms']:.2f} ms  ({totals['latency_sec']:.3f} s)")
-    print(f"  Tokens:       in={totals['tokens_in']}  out={totals['tokens_out']}  "
-          f"total={totals['tokens_total']}")
+    print(
+        f"  Tokens:       in={totals['tokens_in']}  out={totals['tokens_out']}  "
+        f"total={totals['tokens_total']}"
+    )
     print(f"  LLM time:     {totals['llm_latency_ms']:.2f} ms")
     print(f"  Memory peak:  {totals['memory_rss_mb_peak']:.2f} MB (process RSS)")
     print(f"  Energy (est): {totals['energy_estimate_mj']:.2f} mJ")

@@ -10,12 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-IGNORED_DIR_NAMES: frozenset[str] = frozenset({
-    ".venv",
-    "__pycache__",
-    ".git",
-    "node_modules",
-})
+IGNORED_DIR_NAMES: frozenset[str] = frozenset(
+    {
+        ".venv",
+        "__pycache__",
+        ".git",
+        "node_modules",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -156,7 +158,5 @@ class RepoContextBuilder:
 
         head_len = int(limit * 0.7)
         tail_len = int(limit * 0.2)
-        marker = (
-            f"\n\n# ... [{len(text) - head_len - tail_len} chars truncated] ...\n\n"
-        )
+        marker = f"\n\n# ... [{len(text) - head_len - tail_len} chars truncated] ...\n\n"
         return text[:head_len] + marker + text[-tail_len:], True

@@ -8,10 +8,10 @@ kio7) will detect and fix the flaws.
 Output artifact contains a `code` field that kio5 (Bug Detector) reads
 directly when no upstream findings exist.
 """
+
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -75,6 +75,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
     _js = None
     try:
         from shared.messaging.jetstream import get_jetstream
+
         _js = await get_jetstream()
     except Exception:
         pass
@@ -88,11 +89,9 @@ async def handler(envelope: MessageEnvelope) -> dict:
     try:
         llm_override = payload.get("llm_provider_override", "")
         provider = await _get_provider(llm_override)
-        await publish_progress(KIO_ID, envelope.session_id, 40,
-                               "Sending prompt to LLM…", _js)
+        await publish_progress(KIO_ID, envelope.session_id, 40, "Sending prompt to LLM…", _js)
         response = await provider.complete(user_prompt_text, system=SYSTEM_PROMPT)
-        await publish_progress(KIO_ID, envelope.session_id, 80,
-                               "Processing generated code…", _js)
+        await publish_progress(KIO_ID, envelope.session_id, 80, "Processing generated code…", _js)
         generated_code = response.content.strip()
         # Strip accidental markdown fences if the model added them
         if generated_code.startswith("```"):
@@ -129,7 +128,8 @@ async def handler(envelope: MessageEnvelope) -> dict:
         "artifact_data": artifact_data,
         "message": (
             f"Generated {len(generated_code)} chars of {language} code."
-            if not error else f"Code generation failed: {error}"
+            if not error
+            else f"Code generation failed: {error}"
         ),
     }
 

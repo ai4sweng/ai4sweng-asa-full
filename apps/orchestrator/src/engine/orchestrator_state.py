@@ -20,6 +20,7 @@ Transitions (from → event → to)
   RECOVERY      | system restored               | IDLE
   ANY           | shutdown signal               | SHUTDOWN
 """
+
 from __future__ import annotations
 
 from enum import Enum
@@ -60,10 +61,14 @@ class OrchestratorStateMachine:
         """Called by AgentRegistry when a new capability announcement arrives."""
         self._degraded_agents.discard(kio_id)  # recovery side-effect
         if self._state == OrchestratorState.INITIALIZING:
-            target = OrchestratorState.ACTIVE if self._active_workflows > 0 else OrchestratorState.IDLE
+            target = (
+                OrchestratorState.ACTIVE if self._active_workflows > 0 else OrchestratorState.IDLE
+            )
             self._transition(target)
         elif self._state == OrchestratorState.DEGRADED and not self._degraded_agents:
-            target = OrchestratorState.ACTIVE if self._active_workflows > 0 else OrchestratorState.IDLE
+            target = (
+                OrchestratorState.ACTIVE if self._active_workflows > 0 else OrchestratorState.IDLE
+            )
             self._transition(target)
 
     def workflow_submitted(self) -> None:
@@ -89,7 +94,9 @@ class OrchestratorStateMachine:
         """Called when a previously-stale KIO announces again."""
         self._degraded_agents.discard(kio_id)
         if self._state == OrchestratorState.DEGRADED and not self._degraded_agents:
-            target = OrchestratorState.ACTIVE if self._active_workflows > 0 else OrchestratorState.IDLE
+            target = (
+                OrchestratorState.ACTIVE if self._active_workflows > 0 else OrchestratorState.IDLE
+            )
             self._transition(target)
             logger.info("[orchestrator_sm] {} recovered → {}", kio_id, target.value)
 
@@ -102,7 +109,9 @@ class OrchestratorStateMachine:
     def system_restored(self) -> None:
         """Called after manual or automatic recovery from RECOVERY state."""
         if self._state == OrchestratorState.RECOVERY:
-            target = OrchestratorState.ACTIVE if self._active_workflows > 0 else OrchestratorState.IDLE
+            target = (
+                OrchestratorState.ACTIVE if self._active_workflows > 0 else OrchestratorState.IDLE
+            )
             self._transition(target)
 
     def shutdown(self) -> None:
@@ -119,8 +128,11 @@ class OrchestratorStateMachine:
 
     def accepts_workflows(self) -> bool:
         """Return False when the orchestrator should reject new workflow submissions."""
-        return self._state not in (OrchestratorState.RECOVERY, OrchestratorState.SHUTDOWN,
-                                   OrchestratorState.INITIALIZING)
+        return self._state not in (
+            OrchestratorState.RECOVERY,
+            OrchestratorState.SHUTDOWN,
+            OrchestratorState.INITIALIZING,
+        )
 
     def summary(self) -> dict:
         return {
@@ -139,8 +151,10 @@ class OrchestratorStateMachine:
             return
         logger.info(
             "[orchestrator_sm] {} → {}  (workflows={} degraded={})",
-            self._state.value, new_state.value,
-            self._active_workflows, list(self._degraded_agents),
+            self._state.value,
+            new_state.value,
+            self._active_workflows,
+            list(self._degraded_agents),
         )
         self._state = new_state
         for cb in self._state_change_cbs:

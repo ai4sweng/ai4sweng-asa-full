@@ -1,7 +1,6 @@
 """LLM provider factory — selects provider from LLM_PROVIDER env var."""
 
 import logging
-import sys
 
 from shared.config import Settings, get_settings
 from shared.llm.base import BaseLLMProvider
@@ -48,12 +47,8 @@ async def create_llm_provider(
         except OllamaUnavailableError as exc:
             fallback = (override or cfg.llm_provider_fallback or "").strip().lower()
             if fallback and fallback != "ollama":
-                logger.warning(
-                    "Ollama unavailable — falling back to %s (%s)", fallback, exc
-                )
-                return await create_llm_provider(
-                    observability, settings=cfg, override=fallback
-                )
+                logger.warning("Ollama unavailable — falling back to %s (%s)", fallback, exc)
+                return await create_llm_provider(observability, settings=cfg, override=fallback)
             logger.error("%s", exc)
             raise SystemExit(1) from exc
         logger.info("Using Ollama model=%s base_url=%s", cfg.ollama_model, cfg.ollama_base_url)

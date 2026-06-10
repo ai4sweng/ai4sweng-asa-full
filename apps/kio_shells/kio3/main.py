@@ -4,6 +4,7 @@ Scans the target repository using RepoContextBuilder and asks the LLM to
 analyse each source file for structural issues, anti-patterns, and potential
 bugs. Falls back to shaped placeholder findings if LLM is unavailable.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,14 +31,38 @@ _provider = None
 _provider_lock = asyncio.Lock()
 
 FALLBACK_FINDINGS = [
-    {"file": "app/main.py", "line": 23, "severity": "HIGH", "category": "sql_injection",
-     "description": "Raw SQL query with user input — SQL injection risk.", "excerpt": ""},
-    {"file": "app/main.py", "line": 67, "severity": "HIGH", "category": "missing_authentication",
-     "description": "DELETE endpoint has no authentication.", "excerpt": ""},
-    {"file": "app/database.py", "line": 6, "severity": "HIGH", "category": "hardcoded_credentials",
-     "description": "Database credentials hardcoded in source.", "excerpt": ""},
-    {"file": "app/models.py", "line": 11, "severity": "MEDIUM", "category": "plaintext_password",
-     "description": "Password stored as plain text.", "excerpt": ""},
+    {
+        "file": "app/main.py",
+        "line": 23,
+        "severity": "HIGH",
+        "category": "sql_injection",
+        "description": "Raw SQL query with user input — SQL injection risk.",
+        "excerpt": "",
+    },
+    {
+        "file": "app/main.py",
+        "line": 67,
+        "severity": "HIGH",
+        "category": "missing_authentication",
+        "description": "DELETE endpoint has no authentication.",
+        "excerpt": "",
+    },
+    {
+        "file": "app/database.py",
+        "line": 6,
+        "severity": "HIGH",
+        "category": "hardcoded_credentials",
+        "description": "Database credentials hardcoded in source.",
+        "excerpt": "",
+    },
+    {
+        "file": "app/models.py",
+        "line": 11,
+        "severity": "MEDIUM",
+        "category": "plaintext_password",
+        "description": "Password stored as plain text.",
+        "excerpt": "",
+    },
 ]
 
 
@@ -79,14 +104,16 @@ async def handler(envelope: MessageEnvelope) -> dict:
                     issue=description, file_ctx=file_ctx, repo_path=str(abs_path)
                 )
                 for f in result.findings:
-                    findings.append({
-                        "file": f.file_path,
-                        "line": f.line_number,
-                        "severity": f.severity,
-                        "category": f.category,
-                        "description": f.description,
-                        "excerpt": f.excerpt,
-                    })
+                    findings.append(
+                        {
+                            "file": f.file_path,
+                            "line": f.line_number,
+                            "severity": f.severity,
+                            "category": f.category,
+                            "description": f.description,
+                            "excerpt": f.excerpt,
+                        }
+                    )
         else:
             logger.warning("[kio3] Repo path not found: {} — using fallback findings", abs_path)
             findings = FALLBACK_FINDINGS

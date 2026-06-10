@@ -4,6 +4,7 @@ All mutating calls (register_artifact, update_status, create_hitl_checkpoint,
 resolve_checkpoint) use exponential-backoff retry for transient 5xx / network
 errors.  A single blip in Session Manager no longer kills the workflow.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,10 +34,14 @@ async def _with_retry(coro_fn, *args, label: str = "", **kwargs) -> Any:
             if attempt == _MAX_RETRIES - 1:
                 raise
             last_exc = exc
-        delay = _RETRY_BASE_DELAY * (2 ** attempt)
+        delay = _RETRY_BASE_DELAY * (2**attempt)
         logger.warning(
             "[session_client] {} failed (attempt {}/{}): {} — retrying in {:.1f}s",
-            label, attempt + 1, _MAX_RETRIES, last_exc, delay,
+            label,
+            attempt + 1,
+            _MAX_RETRIES,
+            last_exc,
+            delay,
         )
         await asyncio.sleep(delay)
     raise RuntimeError("unreachable")  # pragma: no cover
@@ -60,7 +65,8 @@ class SessionClient:
         self, owner: str = "orchestrator", workflow_id: str | None = None
     ) -> dict[str, Any]:
         resp = await _with_retry(
-            self._client.post, "/sessions/",
+            self._client.post,
+            "/sessions/",
             json={"workflow_id": workflow_id or str(uuid.uuid4()), "owner": owner},
             label="create_session",
         )
@@ -81,7 +87,8 @@ class SessionClient:
         self, session_id: str, status: str, metadata: dict | None = None
     ) -> dict[str, Any]:
         resp = await _with_retry(
-            self._client.put, f"/sessions/{session_id}/status",
+            self._client.put,
+            f"/sessions/{session_id}/status",
             json={"status": status, "metadata": metadata or {}},
             label=f"update_status({session_id[:8]}, {status})",
         )
@@ -90,7 +97,8 @@ class SessionClient:
 
     async def update_progress(self, session_id: str, progress: dict[str, Any]) -> None:
         resp = await _with_retry(
-            self._client.put, f"/sessions/{session_id}/status",
+            self._client.put,
+            f"/sessions/{session_id}/status",
             json={"status": "ACTIVE", "metadata": {"progress": progress}},
             label=f"update_progress({session_id[:8]})",
         )
@@ -100,12 +108,11 @@ class SessionClient:
     # Artifacts
     # ------------------------------------------------------------------
 
-    async def register_artifact(
-        self, session_id: str, artifact: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def register_artifact(self, session_id: str, artifact: dict[str, Any]) -> dict[str, Any]:
         # parent_artifact_id is passed through as-is if present in the artifact dict
         resp = await _with_retry(
-            self._client.post, f"/sessions/{session_id}/artifacts",
+            self._client.post,
+            f"/sessions/{session_id}/artifacts",
             json=artifact,
             label=f"register_artifact({session_id[:8]})",
         )
@@ -140,7 +147,8 @@ class SessionClient:
         if artifact_id:
             payload["artifact_id"] = artifact_id
         resp = await _with_retry(
-            self._client.post, f"/sessions/{session_id}/hitl",
+            self._client.post,
+            f"/sessions/{session_id}/hitl",
             json=payload,
             label=f"create_hitl_checkpoint({session_id[:8]}, {step})",
         )
@@ -157,7 +165,8 @@ class SessionClient:
         feedback: str = "",
     ) -> dict[str, Any]:
         resp = await _with_retry(
-            self._client.put, f"/sessions/{session_id}/hitl/{checkpoint_id}",
+            self._client.put,
+            f"/sessions/{session_id}/hitl/{checkpoint_id}",
             json={"action": action, "actor": actor, "feedback": feedback},
             label=f"resolve_checkpoint({checkpoint_id[:8]})",
         )

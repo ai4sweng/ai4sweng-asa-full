@@ -4,6 +4,7 @@ Users are persisted in PostgreSQL via shared.persistence (UserRecord / 0002 migr
 Passwords are hashed with bcrypt directly.
 JWTs are signed with the jwt_secret_key from shared.config.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -28,6 +29,7 @@ def _hash_password(password: str) -> str:
 
 def _verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
+
 
 # Process-wide SessionProvider for the users table
 _sp: SessionProvider | None = None

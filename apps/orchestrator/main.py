@@ -4,6 +4,7 @@ Run from the EnisAliMerge root with PYTHONPATH set:
     PYTHONPATH=. uvicorn apps.orchestrator.main:app --port 8000
 Or via run_all.sh which sets PYTHONPATH automatically.
 """
+
 import asyncio
 import sys
 from contextlib import asynccontextmanager
@@ -23,12 +24,16 @@ async def lifespan(app: FastAPI):
     cfg = get_settings()
     logger.info(
         "Orchestrator starting — session_manager={} lm_engine={} port={} nats={}",
-        cfg.session_manager_url, cfg.lm_engine_url, cfg.orchestrator_port, cfg.use_nats,
+        cfg.session_manager_url,
+        cfg.lm_engine_url,
+        cfg.orchestrator_port,
+        cfg.use_nats,
     )
 
     # Initialise PostgreSQL LangGraph checkpointer early so the first workflow
     # request doesn't block on pool setup.
     from src.engine.checkpointer import init_checkpointer
+
     try:
         async with asyncio.timeout(30):
             await init_checkpointer()
@@ -37,6 +42,7 @@ async def lifespan(app: FastAPI):
 
     # Initialise WorkflowRunner so get_runner() is always safe in request handlers.
     from src.engine.workflow_runner import init_runner
+
     try:
         async with asyncio.timeout(15):
             await init_runner()
@@ -45,6 +51,7 @@ async def lifespan(app: FastAPI):
 
     # Initialise orchestrator state machine
     from src.engine.orchestrator_state import get_orchestrator_sm
+
     orch_sm = get_orchestrator_sm()
     logger.info("Orchestrator state machine ready — state={}", orch_sm.state.value)
 
@@ -84,19 +91,23 @@ async def lifespan(app: FastAPI):
                     status = data.get("status", "RUNNING")
 
                     if status == "ACKNOWLEDGED":
-                        bus.publish(WorkflowEvent(
-                            "TASK_ACKNOWLEDGED",
-                            session_id,
-                            f"[{kio_id.upper()}] Job acknowledged",
-                            {"kio": kio_id, "status": "ACKNOWLEDGED"},
-                        ))
+                        bus.publish(
+                            WorkflowEvent(
+                                "TASK_ACKNOWLEDGED",
+                                session_id,
+                                f"[{kio_id.upper()}] Job acknowledged",
+                                {"kio": kio_id, "status": "ACKNOWLEDGED"},
+                            )
+                        )
                     else:
-                        bus.publish(WorkflowEvent(
-                            "TASK_PROGRESS",
-                            session_id,
-                            f"[{kio_id.upper()}] {message} ({progress}%)",
-                            {"kio": kio_id, "progress_pct": progress, "message": message},
-                        ))
+                        bus.publish(
+                            WorkflowEvent(
+                                "TASK_PROGRESS",
+                                session_id,
+                                f"[{kio_id.upper()}] {message} ({progress}%)",
+                                {"kio": kio_id, "progress_pct": progress, "message": message},
+                            )
+                        )
                 except Exception as exc:
                     logger.debug("Task status parse error: {}", exc)
 
@@ -110,6 +121,7 @@ async def lifespan(app: FastAPI):
     # Start timeout monitor
     from src.engine.workflow_runner import get_runner as _get_runner
     from src.engine.timeout_monitor import get_timeout_monitor
+
     try:
         runner = _get_runner()
         tm = get_timeout_monitor(runner._active)
@@ -123,6 +135,7 @@ async def lifespan(app: FastAPI):
     # Stop timeout monitor
     try:
         from src.engine.timeout_monitor import get_timeout_monitor as _gtm
+
         _gtm().stop()
     except Exception:
         pass
@@ -130,6 +143,7 @@ async def lifespan(app: FastAPI):
     # Notify orchestrator SM of shutdown
     try:
         from src.engine.orchestrator_state import get_orchestrator_sm as _gsm
+
         _gsm().shutdown()
     except Exception:
         pass
@@ -138,12 +152,14 @@ async def lifespan(app: FastAPI):
     if cfg.use_nats:
         try:
             from shared.messaging.jetstream import _manager
+
             if _manager:
                 await _manager.close()
         except Exception:
             pass
 
     from src.engine.checkpointer import close_checkpointer
+
     await close_checkpointer()
 
     logger.info("Orchestrator shut down")
@@ -179,6 +195,7 @@ async def health():
 async def list_agents():
     """List all KIO agents that have announced themselves via CAPABILITY_ANNOUNCEMENT."""
     from src.engine.agent_registry import get_agent_registry
+
     return {"agents": get_agent_registry().list_agents()}
 
 
@@ -186,13 +203,14 @@ async def list_agents():
 async def orchestrator_status():
     """Orchestrator state machine status — Slide 16 of the interface spec."""
     from src.engine.orchestrator_state import get_orchestrator_sm
+
     return get_orchestrator_sm().summary()
 
 
-from src.api.router import router as workflow_router                    # noqa: E402
-from src.api.auth_router import router as auth_router                  # noqa: E402
-from src.api.mcp_router import router as mcp_router                    # noqa: E402
-from src.api.provenance_router import router as provenance_router      # noqa: E402
+from src.api.router import router as workflow_router  # noqa: E402
+from src.api.auth_router import router as auth_router  # noqa: E402
+from src.api.mcp_router import router as mcp_router  # noqa: E402
+from src.api.provenance_router import router as provenance_router  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(workflow_router)
@@ -202,5 +220,6 @@ app.include_router(mcp_router)
 
 if __name__ == "__main__":
     import uvicorn
+
     cfg = get_settings()
     uvicorn.run("main:app", host=cfg.api_host, port=cfg.orchestrator_port, reload=False)

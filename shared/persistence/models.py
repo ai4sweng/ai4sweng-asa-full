@@ -10,8 +10,15 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import (
-    JSON, Boolean, DateTime, Float, ForeignKey,
-    Integer, String, Text, UniqueConstraint,
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -31,6 +38,7 @@ class Base(DeclarativeBase):
 # ---------------------------------------------------------------------------
 # Workflow & Task
 # ---------------------------------------------------------------------------
+
 
 class WorkflowRecord(Base):
     __tablename__ = "workflows"
@@ -86,6 +94,7 @@ class TaskRecord(Base):
 # Messaging
 # ---------------------------------------------------------------------------
 
+
 class MessageRecord(Base):
     __tablename__ = "messages"
 
@@ -112,6 +121,7 @@ class MessageRecord(Base):
 # Artifacts & Provenance
 # ---------------------------------------------------------------------------
 
+
 class ArtifactRecord(Base):
     __tablename__ = "artifacts"
 
@@ -137,6 +147,7 @@ class ArtifactRecord(Base):
 # Human Approval (HITL)
 # ---------------------------------------------------------------------------
 
+
 class HumanApprovalRecord(Base):
     __tablename__ = "human_approvals"
 
@@ -147,7 +158,7 @@ class HumanApprovalRecord(Base):
     task_id: Mapped[str] = mapped_column(String(36), ForeignKey("tasks.id"), nullable=False)
     kio_id: Mapped[str | None] = mapped_column(String(32))
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
-    decision: Mapped[str | None] = mapped_column(String(16))   # APPROVED | REJECTED
+    decision: Mapped[str | None] = mapped_column(String(16))  # APPROVED | REJECTED
     feedback: Mapped[str | None] = mapped_column(Text)
     decided_by: Mapped[str] = mapped_column(String(128), default="human")
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -160,6 +171,7 @@ class HumanApprovalRecord(Base):
 # ---------------------------------------------------------------------------
 # Observability
 # ---------------------------------------------------------------------------
+
 
 class MetricRecord(Base):
     __tablename__ = "metrics"
@@ -200,6 +212,7 @@ class WorkflowSpanRecord(Base):
 # Reports
 # ---------------------------------------------------------------------------
 
+
 class ReportRecord(Base):
     __tablename__ = "reports"
 
@@ -218,6 +231,7 @@ class ReportRecord(Base):
 # Users (authentication)
 # ---------------------------------------------------------------------------
 
+
 class UserRecord(Base):
     """Platform user — credentials stored with bcrypt hash, no plaintext passwords."""
 
@@ -234,6 +248,7 @@ class UserRecord(Base):
 # ---------------------------------------------------------------------------
 # Agent / KIO Registry (replaces AgentRecord from ai4sweng-kio1)
 # ---------------------------------------------------------------------------
+
 
 class AgentRecord(Base):
     """Registered KIO agent metadata and heartbeat tracking."""
@@ -255,6 +270,7 @@ class AgentRecord(Base):
 # ---------------------------------------------------------------------------
 # KIO Capability Registry
 # ---------------------------------------------------------------------------
+
 
 class KIOCapabilityRecord(Base):
     """Persisted KIO capability — queried by LLM planner for dynamic KIO selection."""

@@ -12,6 +12,7 @@ Transport selection
   NATS:  orchestrator publishes to JetStream; KIO subscribes with durable consumer
          and replies on the ephemeral `_reply_to` subject embedded in the envelope.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,10 +28,10 @@ from pydantic import BaseModel
 
 class MessageEnvelope(BaseModel):
     message_id: str
-    correlation_id: str = ""      # ties retries of the same logical request together
-    step_id: str = ""             # "step_{n}_{kio_id}" — position in the pipeline
+    correlation_id: str = ""  # ties retries of the same logical request together
+    step_id: str = ""  # "step_{n}_{kio_id}" — position in the pipeline
     protocol_version: str = "1.0.0"
-    project_id: str = ""          # platform project identifier (Slide 7)
+    project_id: str = ""  # platform project identifier (Slide 7)
     session_id: str
     workflow_id: str
     source: str
@@ -41,7 +42,6 @@ class MessageEnvelope(BaseModel):
 
 
 HandlerFn = Callable[[MessageEnvelope], Awaitable[dict[str, Any]]]
-
 
 
 async def publish_progress(
@@ -130,6 +130,7 @@ async def _capability_loop(
     hard-code new KIOs in kio_port_map.
     """
     import os
+
     kio_base_host = os.environ.get("KIO_BASE_HOST", "localhost")
     # Empty string in Docker → use service name (kio_id) as Docker DNS hostname
     host = kio_base_host if kio_base_host else kio_id
@@ -185,19 +186,27 @@ def make_kio_app(
     dynamically without needing a static port-map entry.
     """
     import os
+
     _tasks = supported_tasks or [
-        {"task_type": kio_id, "description": title, "input_schema": "envelope_v1", "output_schema": "artifact_v1"}
+        {
+            "task_type": kio_id,
+            "description": title,
+            "input_schema": "envelope_v1",
+            "output_schema": "artifact_v1",
+        }
     ]
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
         from shared.config import get_settings
+
         cfg = get_settings()
         port = int(os.environ.get("KIO_PORT", "8000"))
         js = None
         if cfg.use_nats:
             try:
                 from shared.messaging.jetstream import get_jetstream
+
                 js = await get_jetstream()
                 await js.subscribe_requests(kio_id, _make_nats_handler(kio_id, handler, js))
                 logger.info("[{}] JetStream consumer active", kio_id)
@@ -205,7 +214,9 @@ def make_kio_app(
                 logger.warning("[{}] NATS unavailable — HTTP only ({})", kio_id, exc)
 
         hb_task = asyncio.create_task(_heartbeat_loop(kio_id, js, cfg.kio_heartbeat_interval))
-        cap_task = asyncio.create_task(_capability_loop(kio_id, title, port, _tasks, js, cfg.kio_capability_interval))
+        cap_task = asyncio.create_task(
+            _capability_loop(kio_id, title, port, _tasks, js, cfg.kio_capability_interval)
+        )
         yield
 
         for task in (hb_task, cap_task):
@@ -226,8 +237,13 @@ def make_kio_app(
     async def execute(envelope: MessageEnvelope) -> MessageEnvelope:
         """HTTP execution endpoint — always available for direct testing."""
         from shared.config import get_settings as _cfg
-        logger.info("[{}] JOB_REQUEST (HTTP) from {} session={}",
-                    kio_id, envelope.source, envelope.session_id)
+
+        logger.info(
+            "[{}] JOB_REQUEST (HTTP) from {} session={}",
+            kio_id,
+            envelope.source,
+            envelope.session_id,
+        )
         cfg_timeout = float(_cfg().kio_client_timeout) - 10  # headroom for reply
         # Per-task timeout_seconds from envelope payload takes precedence (Slide 8)
         task_timeout = envelope.payload.get("timeout_seconds")
@@ -279,7 +295,9 @@ def make_kio_app(
             try:
                 await compensation_handler(artifact_id)
             except Exception as exc:
-                logger.warning("[{}] compensation_handler failed for {}: {}", kio_id, artifact_id[:8], exc)
+                logger.warning(
+                    "[{}] compensation_handler failed for {}: {}", kio_id, artifact_id[:8], exc
+                )
         return None  # 204 No Content
 
     return app
@@ -290,6 +308,7 @@ def _make_nats_handler(kio_id: str, handler: HandlerFn, js) -> Any:
 
     async def _handle(data: dict[str, Any], msg: Any) -> None:
         from shared.config import get_settings as _cfg
+
         reply_to: str = data.pop("_reply_to", "")
         cfg_timeout = float(_cfg().kio_client_timeout) - 10
         # Per-task timeout from envelope payload (Slide 8)

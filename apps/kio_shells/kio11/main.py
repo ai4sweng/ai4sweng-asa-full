@@ -3,6 +3,7 @@
 Reads the repository source and generates comprehensive pytest test suites,
 fixtures, and coverage configuration using AI-driven test case synthesis.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -73,9 +74,7 @@ async def _build_repo_context(repo_path: str) -> str:
     cfg = get_settings()
     builder = RepoContextBuilder(str(abs_path))
     inventory = builder.build_inventory()
-    rel_paths = builder.select_analysis_files(
-        inventory, max_files=cfg.repo_analysis_max_files
-    )
+    rel_paths = builder.select_analysis_files(inventory, max_files=cfg.repo_analysis_max_files)
     parts = []
     for rel_path in rel_paths:
         ctx = builder.read_file_context(rel_path)

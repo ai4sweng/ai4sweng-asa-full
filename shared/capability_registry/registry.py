@@ -8,7 +8,6 @@ The LLM planner calls list_capabilities() to build its prompt context.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from shared.contracts.capabilities import KIOCapability
 from shared.persistence.session_provider import SessionProvider
@@ -90,5 +89,6 @@ def get_capability_registry() -> CapabilityRegistry:
     global _registry
     if _registry is None:
         from shared.persistence.session_provider import SessionProvider
+
         _registry = CapabilityRegistry(SessionProvider())
     return _registry

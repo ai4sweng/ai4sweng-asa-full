@@ -9,6 +9,7 @@ Integration
   WorkflowRunner.run() stores ``deadline`` in ``_active[session_id]`` when
   ``timeout_seconds`` is provided.  TimeoutMonitor reads that key.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -34,7 +35,9 @@ class TimeoutMonitor:
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop())
-        logger.info("[timeout_monitor] started (poll every {}s)", get_settings().timeout_monitor_interval)
+        logger.info(
+            "[timeout_monitor] started (poll every {}s)", get_settings().timeout_monitor_interval
+        )
 
     def stop(self) -> None:
         if self._task and not self._task.done():
@@ -57,7 +60,14 @@ class TimeoutMonitor:
             deadline = state.get("deadline")
             if not deadline:
                 continue
-            if state.get("status") in ("COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "PENDING_REVIEW", "BLOCKED"):
+            if state.get("status") in (
+                "COMPLETED",
+                "FAILED",
+                "TIMEOUT",
+                "CANCELLED",
+                "PENDING_REVIEW",
+                "BLOCKED",
+            ):
                 continue
             try:
                 dl = datetime.fromisoformat(deadline) if isinstance(deadline, str) else deadline
@@ -65,12 +75,15 @@ class TimeoutMonitor:
                     elapsed = (now - dl).total_seconds()
                     logger.warning(
                         "[timeout_monitor] session {} exceeded deadline by {:.0f}s → cancelling",
-                        session_id[:8], elapsed,
+                        session_id[:8],
+                        elapsed,
                     )
                     if self._cancel_cb:
                         await self._cancel_cb(session_id, "TASK_TIMEOUT")
             except Exception as exc:
-                logger.debug("[timeout_monitor] deadline parse error for {}: {}", session_id[:8], exc)
+                logger.debug(
+                    "[timeout_monitor] deadline parse error for {}: {}", session_id[:8], exc
+                )
 
 
 # ------------------------------------------------------------------

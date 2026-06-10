@@ -233,9 +233,7 @@ async def analyze_repository_file(
             retry_prompt,
             system=_RETRY_REPAIR_SYSTEM,
         )
-        retry_findings, retry_error = _parse_response(
-            retry_response.content, file_ctx
-        )
+        retry_findings, retry_error = _parse_response(retry_response.content, file_ctx)
 
         result.retry_used = True
         result.retry_prompt = retry_prompt
@@ -253,9 +251,7 @@ async def analyze_repository_file(
             return result
 
         result.parse_error = retry_error or error
-        logger.warning(
-            "Retry parse failed for %s: %s", file_ctx.file_path, result.parse_error
-        )
+        logger.warning("Retry parse failed for %s: %s", file_ctx.file_path, result.parse_error)
 
     # Per-file regex mini-scanner fallback.
     if repo_path and not result.findings:

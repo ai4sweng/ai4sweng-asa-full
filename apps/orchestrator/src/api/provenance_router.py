@@ -10,6 +10,7 @@ GET /workflow/{session_id}/artifacts/{artifact_id}/lineage
     Walk the parent chain from artifact_id to the root and return the full chain.
     Response is ordered root → artifact_id (oldest first).
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,12 +18,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from shared.auth.dependencies import get_current_user
 from shared.auth.schemas import UserInfo
 
+import re as _re
+
 from ..engine.provenance_manager import get_provenance_manager
 from ..engine.workflow_runner import get_runner
 
 router = APIRouter(prefix="/workflow", tags=["provenance"])
 
-import re as _re
 _UUID_RE = _re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 

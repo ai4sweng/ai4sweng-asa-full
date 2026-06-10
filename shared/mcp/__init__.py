@@ -9,6 +9,7 @@ Endpoint summary
   GET  /mcp/tools           — list all registered tools (MCP tools/list)
   POST /mcp/tools/call      — execute a tool  (MCP tools/call)
 """
+
 from shared.mcp.registry import MCPToolRegistry, get_registry
 
 __all__ = ["MCPToolRegistry", "get_registry"]

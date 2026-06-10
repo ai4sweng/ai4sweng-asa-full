@@ -1,8 +1,8 @@
 """MCP filesystem tools — read, list, and write files."""
+
 from __future__ import annotations
 
 import fnmatch
-import os
 from pathlib import Path
 from typing import Any
 
@@ -45,11 +45,13 @@ async def list_directory(args: dict[str, Any]) -> list[dict[str, Any]]:
         if pattern and not fnmatch.fnmatch(name, pattern):
             continue
         rel = entry.relative_to(root)
-        entries.append({
-            "path": str(rel),
-            "type": "dir" if entry.is_dir() else "file",
-            "size": entry.stat().st_size if entry.is_file() else None,
-        })
+        entries.append(
+            {
+                "path": str(rel),
+                "type": "dir" if entry.is_dir() else "file",
+                "size": entry.stat().st_size if entry.is_file() else None,
+            }
+        )
         if len(entries) >= 500:
             entries.append({"note": "Listing truncated at 500 entries"})
             break
@@ -65,9 +67,9 @@ async def write_file(args: dict[str, Any]) -> str:
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        mode = "a" if append else "w"
-        path.write_text(content, encoding="utf-8") if not append else \
-            path.open("a", encoding="utf-8").write(content)
+        path.write_text(content, encoding="utf-8") if not append else path.open(
+            "a", encoding="utf-8"
+        ).write(content)
         return f"OK: wrote {len(content)} chars to {path}"
     except OSError as exc:
         return f"ERROR writing {path}: {exc}"

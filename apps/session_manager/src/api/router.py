@@ -1,4 +1,5 @@
 """Session Manager API routes."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
@@ -96,9 +97,7 @@ async def create_hitl_checkpoint(session_id: str, req: CreateCheckpointRequest):
 
 
 @router.put("/{session_id}/hitl/{checkpoint_id}", response_model=CheckpointResponse)
-async def resolve_checkpoint(
-    session_id: str, checkpoint_id: str, req: ApproveCheckpointRequest
-):
+async def resolve_checkpoint(session_id: str, checkpoint_id: str, req: ApproveCheckpointRequest):
     svc = get_session_service()
     result = await svc.resolve_checkpoint(
         session_id,

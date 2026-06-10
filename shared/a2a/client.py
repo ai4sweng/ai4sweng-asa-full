@@ -14,6 +14,7 @@ all artifacts they produce are visible to the orchestrator and Session Manager
 without any special plumbing.  The calling KIO is responsible for passing the
 result back to the orchestrator as part of its own artifact_data.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -79,12 +80,17 @@ class A2AClient:
 
     async def _invoke_nats(self, target_kio: str, envelope: dict, cfg) -> dict[str, Any]:
         from shared.messaging.jetstream import get_jetstream
+
         js = await get_jetstream()
-        logger.info("[a2a] → JetStream {}.request session={}", target_kio, envelope["session_id"][:8])
+        logger.info(
+            "[a2a] → JetStream {}.request session={}", target_kio, envelope["session_id"][:8]
+        )
         result = await js.request_reply(
             target_kio, envelope, timeout=float(cfg.nats_request_timeout)
         )
-        logger.info("[a2a] ← {} replied: status={}", target_kio, result.get("payload", {}).get("status"))
+        logger.info(
+            "[a2a] ← {} replied: status={}", target_kio, result.get("payload", {}).get("status")
+        )
         return result
 
     async def _invoke_http(self, target_kio: str, envelope: dict, cfg) -> dict[str, Any]:

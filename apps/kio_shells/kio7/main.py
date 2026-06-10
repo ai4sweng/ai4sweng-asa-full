@@ -6,6 +6,7 @@
 4. Runs pytest with SQLite so no external database is needed
 5. Uses LLM to interpret results and map failures back to patches
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -93,6 +94,7 @@ def _run_pytest(workspace: str) -> dict:
         "JWT_SECRET_KEY": "test-secret-key-for-ci",
     }
     from shared.config import get_settings as _cfg
+
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "tests/", "-v", "--tb=short", "-q"],
         cwd=workspace,
@@ -118,9 +120,8 @@ def _run_pytest(workspace: str) -> dict:
                     errors = n
 
     # collection_failed: rc=4 with no stdout, or any ImportError/ModuleNotFoundError in stderr
-    collection_failed = (
-        (result.returncode == 4 and not stdout.strip())
-        or any(e in stderr for e in ("ImportError", "ModuleNotFoundError", "KeyError", "FastAPIError"))
+    collection_failed = (result.returncode == 4 and not stdout.strip()) or any(
+        e in stderr for e in ("ImportError", "ModuleNotFoundError", "KeyError", "FastAPIError")
     )
 
     return {
@@ -142,17 +143,24 @@ def _collect_only(workspace: str) -> str:
         **os.environ,
         "DATABASE_URL": f"sqlite:///{workspace}/test.db",
         "PYTHONPATH": f"{workspace}:{workspace}/app",
-        "DB_USER": "testuser", "DB_PASSWORD": "testpass",
-        "DB_HOST": "localhost", "DB_NAME": "testdb",
+        "DB_USER": "testuser",
+        "DB_PASSWORD": "testpass",
+        "DB_HOST": "localhost",
+        "DB_NAME": "testdb",
         "SECRET_KEY": "test-secret-key-for-ci",
         "JWT_SECRET_KEY": "test-secret-key-for-ci",
     }
     from shared.config import get_settings as _cfg
+
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "tests/", "--collect-only", "-q"],
-        cwd=workspace, capture_output=True, text=True, timeout=_cfg().kio_subprocess_test_timeout, env=env,
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        timeout=_cfg().kio_subprocess_test_timeout,
+        env=env,
     )
-    if result.returncode not in (0, 5):   # 5 = no tests collected (ok)
+    if result.returncode not in (0, 5):  # 5 = no tests collected (ok)
         return (result.stderr or result.stdout or "collection failed")[-600:]
     return ""
 
@@ -199,12 +207,14 @@ def _sanitize_test_assertions(content: str) -> str:
         # where the previous non-blank line contains .delete( or .put( or .patch(
         if stripped == "assert response.status_code == 200":
             # Look back for the triggering HTTP method
-            context = "".join(lines[max(0, i-5):i]).lower()
+            context = "".join(lines[max(0, i - 5) : i]).lower()
             if any(m in context for m in (".delete(", ".put(", ".patch(")):
                 indent = len(line) - len(line.lstrip())
                 replacement = " " * indent + "assert response.status_code in (200, 401, 403, 404)\n"
                 out.append(replacement)
-                logger.debug("[kio7] Sanitized backwards DELETE/PUT/PATCH assertion at line {}", i+1)
+                logger.debug(
+                    "[kio7] Sanitized backwards DELETE/PUT/PATCH assertion at line {}", i + 1
+                )
                 i += 1
                 continue
 
@@ -212,9 +222,11 @@ def _sanitize_test_assertions(content: str) -> str:
         if "assert response.status_code == 200" in stripped and "# BUG" in stripped:
             indent = len(line) - len(line.lstrip())
             # Replace with a non-failing assertion that accepts any status
-            replacement = " " * indent + "assert response.status_code in (200, 401, 403, 404)  # sanitized\n"
+            replacement = (
+                " " * indent + "assert response.status_code in (200, 401, 403, 404)  # sanitized\n"
+            )
             out.append(replacement)
-            logger.debug("[kio7] Sanitized BUG-tagged assertion at line {}", i+1)
+            logger.debug("[kio7] Sanitized BUG-tagged assertion at line {}", i + 1)
             i += 1
             continue
 
@@ -244,7 +256,7 @@ def _inject_test_imports(path: str, content: str) -> str:
     return content
 
 
-_SAFE_DATABASE_PY = '''\
+_SAFE_DATABASE_PY = """\
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -261,7 +273,7 @@ def get_db():
         yield db
     finally:
         db.close()
-'''
+"""
 
 
 def _apply_database_shim(workspace: str) -> None:
@@ -279,7 +291,7 @@ def _write_conftest(workspace: str) -> None:
     conftest = os.path.join(workspace, "conftest.py")
     if os.path.exists(conftest):
         return
-    content = '''\
+    content = """\
 import pytest
 import os
 
@@ -289,7 +301,7 @@ def create_tables():
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
-'''
+"""
     with open(conftest, "w") as f:
         f.write(content)
     logger.info("[kio7] conftest.py written for auto table creation")
@@ -307,12 +319,14 @@ async def handler(envelope: MessageEnvelope) -> dict:
     _js = None
     try:
         from shared.messaging.jetstream import get_jetstream
+
         _js = await get_jetstream()
     except Exception:
         pass
 
-    await publish_progress(KIO_ID, envelope.session_id, 10,
-                           f"Preparing workspace for {len(patches)} patch(es)…", _js)
+    await publish_progress(
+        KIO_ID, envelope.session_id, 10, f"Preparing workspace for {len(patches)} patch(es)…", _js
+    )
 
     repo_path = _resolve_repo(working_directory)
     if not repo_path:
@@ -323,7 +337,9 @@ async def handler(envelope: MessageEnvelope) -> dict:
             "artifact_data": {
                 "kio": KIO_ID,
                 "error": "Repository not accessible in container",
-                "passed": 0, "failed": 0, "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "total": 0,
                 "produced_at": datetime.now(timezone.utc).isoformat(),
             },
             "message": "Test re-run skipped: repo not mounted.",
@@ -347,7 +363,9 @@ async def handler(envelope: MessageEnvelope) -> dict:
                 try:
                     compile(content, dest, "exec")
                 except SyntaxError as syn_err:
-                    logger.warning("[kio7] Patch {} has SyntaxError — keeping original: {}", rel, syn_err)
+                    logger.warning(
+                        "[kio7] Patch {} has SyntaxError — keeping original: {}", rel, syn_err
+                    )
                     continue
             with open(dest, "w") as f:
                 f.write(content)
@@ -384,7 +402,10 @@ async def handler(envelope: MessageEnvelope) -> dict:
         patched_stderr = ""
 
         if collect_err:
-            logger.warning("[kio7] Collection check failed ({}), restoring app/ from original", collect_err[:120])
+            logger.warning(
+                "[kio7] Collection check failed ({}), restoring app/ from original",
+                collect_err[:120],
+            )
             patched_stderr = collect_err
             for py_file in Path(repo_path).rglob("*.py"):
                 rel = str(py_file.relative_to(repo_path))
@@ -393,13 +414,14 @@ async def handler(envelope: MessageEnvelope) -> dict:
                     shutil.copy2(str(py_file), dest)
             _apply_database_shim(tmpdir)
 
-        await publish_progress(KIO_ID, envelope.session_id, 50,
-                               "Running pytest suite…", _js)
+        await publish_progress(KIO_ID, envelope.session_id, 50, "Running pytest suite…", _js)
         # 8. Full pytest run
         try:
             pytest_summary = await loop.run_in_executor(None, lambda: _run_pytest(tmpdir))
             if patched_stderr:
-                pytest_summary["note"] = "ran against original source (patches caused collection failure)"
+                pytest_summary["note"] = (
+                    "ran against original source (patches caused collection failure)"
+                )
                 pytest_summary["patched_stderr"] = patched_stderr[:600]
         except subprocess.TimeoutExpired:
             pytest_summary = {"error": "timeout", "passed": 0, "failed": 0, "total": 0}
@@ -410,14 +432,18 @@ async def handler(envelope: MessageEnvelope) -> dict:
     failed = pytest_summary.get("failed", 0)
     total = pytest_summary.get("total", 0)
     logger.info("[kio7] Results: {}/{} passed", passed, total)
-    await publish_progress(KIO_ID, envelope.session_id, 75,
-                           f"Pytest done: {passed}/{total} passed — interpreting results…", _js)
+    await publish_progress(
+        KIO_ID,
+        envelope.session_id,
+        75,
+        f"Pytest done: {passed}/{total} passed — interpreting results…",
+        _js,
+    )
 
     # 5. LLM interpretation
     try:
         llm_override = payload.get("llm_provider_override", "")
         provider = await _get_provider(llm_override)
-        import json
         user_prompt = (
             f"Pytest stdout:\n{pytest_summary.get('stdout', '')}\n\n"
             f"Patches applied: {[p.get('path') for p in patches]}\n\n"

@@ -4,6 +4,7 @@ Independently validates the findings passed through from kio3 (via kio4's
 artifact) using LLM-powered analysis. Always returns REVIEW_REQUIRED so a
 human approves the confirmed bug list before patch generation begins.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -99,6 +100,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
     _js = None
     try:
         from shared.messaging.jetstream import get_jetstream
+
         _js = await get_jetstream()
     except Exception:
         pass
@@ -112,7 +114,9 @@ async def handler(envelope: MessageEnvelope) -> dict:
         llm_override = payload.get("llm_provider_override", "")
         provider = await _get_provider(llm_override)
 
-        await publish_progress(KIO_ID, envelope.session_id, 35, "Sending code to LLM for analysis…", _js)
+        await publish_progress(
+            KIO_ID, envelope.session_id, 35, "Sending code to LLM for analysis…", _js
+        )
 
         if raw_code and not findings:
             # Direct mode: full bug detection on the provided code snippet
@@ -148,8 +152,9 @@ async def handler(envelope: MessageEnvelope) -> dict:
         summary = f"Bug detection encountered an error: {exc}"
         bugs = []
 
-    await publish_progress(KIO_ID, envelope.session_id, 75,
-                           f"{len(bugs)} bug(s) confirmed — running OWASP scan…", _js)
+    await publish_progress(
+        KIO_ID, envelope.session_id, 75, f"{len(bugs)} bug(s) confirmed — running OWASP scan…", _js
+    )
 
     # ── A2A: call kio12 for OWASP scan on the same code ──────────────────────
     owasp_vulns: list = []
@@ -160,6 +165,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
     if raw_code:
         try:
             from shared.a2a.client import get_a2a_client
+
             a2a = get_a2a_client()
             logger.info("[kio5] A2A → kio12 OWASP scan (session={})", envelope.session_id[:8])
             kio12_result = await a2a.invoke(
@@ -177,16 +183,21 @@ async def handler(envelope: MessageEnvelope) -> dict:
             owasp_vulns = kio12_data.get("vulnerabilities", [])
             owasp_summary = kio12_data.get("summary", "")
             hardened_files = kio12_data.get("files", [])
-            logger.info("[kio5] A2A ← kio12: {} OWASP finding(s), {} hardened file(s)",
-                        len(owasp_vulns), len(hardened_files))
+            logger.info(
+                "[kio5] A2A ← kio12: {} OWASP finding(s), {} hardened file(s)",
+                len(owasp_vulns),
+                len(hardened_files),
+            )
         except Exception as exc:
             owasp_error = str(exc)
-            logger.error("[kio5] A2A kio12 call FAILED ({}); OWASP data unavailable — "
-                         "reviewer should be aware", exc)
+            logger.error(
+                "[kio5] A2A kio12 call FAILED ({}); OWASP data unavailable — "
+                "reviewer should be aware",
+                exc,
+            )
     # ─────────────────────────────────────────────────────────────────────────
 
-    await publish_progress(KIO_ID, envelope.session_id, 90,
-                           "Composing bug report…", _js)
+    await publish_progress(KIO_ID, envelope.session_id, 90, "Composing bug report…", _js)
 
     bug_count = len(bugs)
     criticals = sum(1 for b in bugs if b.get("severity") == "CRITICAL")
@@ -214,7 +225,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
         # OWASP enrichment via A2A kio12
         "owasp_vulnerabilities": owasp_vulns,
         "owasp_summary": owasp_summary,
-        "owasp_error": owasp_error,   # empty string = success; non-empty = kio12 failed
+        "owasp_error": owasp_error,  # empty string = success; non-empty = kio12 failed
         "hardened_files": hardened_files,
         # Pass kio4's generated test files through so kio7 can write and run them
         "test_files": last_artifact.get("files", []),

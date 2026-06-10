@@ -1,4 +1,5 @@
 """In-process SSE event bus — one asyncio.Queue per subscriber."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +7,6 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
-
 
 
 @dataclass
@@ -17,7 +17,7 @@ class WorkflowEvent:
     session_id: str
     message: str
     data: dict[str, Any] | None = None
-    owner: str = ""   # stamped by WorkflowRunner._emit; used for per-user SSE filtering
+    owner: str = ""  # stamped by WorkflowRunner._emit; used for per-user SSE filtering
     ts: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_sse(self) -> str:
@@ -68,6 +68,7 @@ class EventBus:
         rather than holding a zombie queue entry indefinitely.
         """
         from shared.config import get_settings
+
         cfg = get_settings()
         q: asyncio.Queue[WorkflowEvent | None] = asyncio.Queue(maxsize=cfg.sse_queue_maxsize)
 

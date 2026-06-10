@@ -24,6 +24,7 @@ MCP client configuration (Claude Desktop example)::
       }
     }
 """
+
 from __future__ import annotations
 
 from typing import Any

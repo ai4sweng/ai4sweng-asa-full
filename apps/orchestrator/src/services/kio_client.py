@@ -13,6 +13,7 @@ Transport selection (per ``shared.config.Settings.use_nats``):
     POST /execute — same as Phase 2 behaviour.  Used for local dev without
     a running NATS server.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -36,6 +37,7 @@ class KioClient:
         # Register a cache-bust callback with the AgentRegistry
         try:
             from ..engine.agent_registry import get_agent_registry
+
             get_agent_registry().on_endpoint_change(self._invalidate_client)
         except Exception:
             pass
@@ -60,17 +62,19 @@ class KioClient:
         """
         cfg = get_settings()
         envelope = self._build_envelope(
-            kio_id, session_id, workflow_id, payload,
-            correlation_id=correlation_id, step_id=step_id,
+            kio_id,
+            session_id,
+            workflow_id,
+            payload,
+            correlation_id=correlation_id,
+            step_id=step_id,
         )
 
         if cfg.use_nats:
             try:
                 return await self._execute_nats(kio_id, envelope, cfg)
             except Exception as exc:
-                logger.warning(
-                    "[{}] NATS execute failed ({}); falling back to HTTP", kio_id, exc
-                )
+                logger.warning("[{}] NATS execute failed ({}); falling back to HTTP", kio_id, exc)
 
         return await self._execute_http(kio_id, envelope, cfg)
 
@@ -89,6 +93,7 @@ class KioClient:
         if cfg.use_nats:
             try:
                 from shared.messaging.jetstream import get_jetstream
+
                 js = await get_jetstream()
                 await js.close()
             except Exception:
@@ -98,23 +103,18 @@ class KioClient:
     # Transport implementations
     # ------------------------------------------------------------------
 
-    async def _execute_nats(
-        self, kio_id: str, envelope: dict[str, Any], cfg
-    ) -> dict[str, Any]:
+    async def _execute_nats(self, kio_id: str, envelope: dict[str, Any], cfg) -> dict[str, Any]:
         """Publish via JetStream and wait for direct reply."""
         from shared.messaging.jetstream import get_jetstream
+
         js = await get_jetstream()
         logger.info("→ JetStream kio.{}.request session={}", kio_id, envelope["session_id"][:8])
-        result = await js.request_reply(
-            kio_id, envelope, timeout=float(cfg.nats_request_timeout)
-        )
+        result = await js.request_reply(kio_id, envelope, timeout=float(cfg.nats_request_timeout))
         job_status = result.get("payload", {}).get("status", "DONE")
         logger.info("← [{}] JetStream reply: status={}", kio_id, job_status)
         return result
 
-    async def _execute_http(
-        self, kio_id: str, envelope: dict[str, Any], cfg
-    ) -> dict[str, Any]:
+    async def _execute_http(self, kio_id: str, envelope: dict[str, Any], cfg) -> dict[str, Any]:
         """POST /execute — HTTP fallback."""
         client = self._get_http_client(kio_id)
         logger.info("→ HTTP POST /execute kio={} session={}", kio_id, envelope["session_id"][:8])
@@ -145,7 +145,7 @@ class KioClient:
             "correlation_id": correlation_id,
             "step_id": step_id,
             "protocol_version": "1.0.0",
-            "project_id": cfg.project_id,   # Slide 7: explicit project_id field
+            "project_id": cfg.project_id,  # Slide 7: explicit project_id field
             "session_id": session_id,
             "workflow_id": workflow_id,
             "source": cfg.project_id,
@@ -161,6 +161,7 @@ class KioClient:
         self._endpoint_keys.pop(kio_id, None)
         if old:
             import asyncio
+
             asyncio.create_task(old.aclose())
             logger.info("[kio_client] Invalidated cached client for {} (endpoint changed)", kio_id)
 
@@ -171,6 +172,7 @@ class KioClient:
         registry_endpoint: tuple[str, int] | None = None
         try:
             from ..engine.agent_registry import get_agent_registry
+
             registry_endpoint = get_agent_registry().get_endpoint(kio_id)
         except Exception:
             pass

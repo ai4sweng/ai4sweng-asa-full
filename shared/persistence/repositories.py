@@ -354,9 +354,7 @@ class Repository:
         await self._session.flush()
         return record
 
-    async def list_kio_capabilities(
-        self, available_only: bool = True
-    ) -> list[KIOCapabilityRecord]:
+    async def list_kio_capabilities(self, available_only: bool = True) -> list[KIOCapabilityRecord]:
         query = select(KIOCapabilityRecord).order_by(KIOCapabilityRecord.kio_id)
         if available_only:
             query = query.where(KIOCapabilityRecord.available.is_(True))

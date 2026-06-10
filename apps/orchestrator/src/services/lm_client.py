@@ -1,7 +1,7 @@
 """HTTP client for the LM Engine service."""
+
 from __future__ import annotations
 
-from typing import Any
 
 import httpx
 from loguru import logger

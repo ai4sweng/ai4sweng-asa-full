@@ -1,4 +1,5 @@
 """Orchestrator API schemas."""
+
 from __future__ import annotations
 
 import re
@@ -7,9 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-_UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-)
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 class RunWorkflowRequest(BaseModel):

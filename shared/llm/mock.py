@@ -33,11 +33,7 @@ class MockLLMProvider(BaseLLMProvider):
         combined = f"{prompt_lower} {system_lower}"
 
         # --- Repo audit workflow (checked before Fibonacci keyword overlap) ---
-        if (
-            "repo" in combined
-            or "repository" in combined
-            or _has_word(combined, "audit")
-        ):
+        if "repo" in combined or "repository" in combined or _has_word(combined, "audit"):
             content = self._repo_audit_response(prompt_lower, system_lower)
         elif self._is_fibonacci_planner(prompt_lower):
             content = (
@@ -65,12 +61,8 @@ class MockLLMProvider(BaseLLMProvider):
 
     @staticmethod
     def _repo_audit_response(prompt_lower: str, system_lower: str) -> str:
-        if (
-            "findings to validate" in prompt_lower
-            and (
-                "bug detection agent" in system_lower
-                or "repair invalid" in system_lower
-            )
+        if "findings to validate" in prompt_lower and (
+            "bug detection agent" in system_lower or "repair invalid" in system_lower
         ):
             return MockLLMProvider._mock_bug_detection_json(prompt_lower)
         if "auditing a python repository" in system_lower and "audit issue:" in prompt_lower:
@@ -208,7 +200,7 @@ class MockLLMProvider(BaseLLMProvider):
                     "line": 59,
                     "severity": "critical",
                     "description": "SQL injection in search_users_by_name",
-                    "evidence": "f\"SELECT",
+                    "evidence": 'f"SELECT',
                     "recommended_fix": "Use parameterized query",
                 }
             )
@@ -242,9 +234,8 @@ class MockLLMProvider(BaseLLMProvider):
 
     @staticmethod
     def _is_fibonacci_planner(prompt_lower: str) -> bool:
-        return (
-            "create a plan for" in prompt_lower
-            or ("fibonacci" in prompt_lower and _has_word(prompt_lower, "plan"))
+        return "create a plan for" in prompt_lower or (
+            "fibonacci" in prompt_lower and _has_word(prompt_lower, "plan")
         )
 
     @staticmethod

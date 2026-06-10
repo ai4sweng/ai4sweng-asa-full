@@ -22,9 +22,10 @@ Scheduling algorithm
 The caller (``run_kio_node``) raises a RuntimeError on None, which feeds into
 the RetryManager / HITL fallback chain.
 """
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -62,8 +63,11 @@ class TaskScheduler:
             The kio_id to dispatch, or None if capability check failed.
         """
         if current_step >= len(kio_sequence):
-            logger.error("[task_scheduler] step {} out of range (seq len {})",
-                         current_step, len(kio_sequence))
+            logger.error(
+                "[task_scheduler] step {} out of range (seq len {})",
+                current_step,
+                len(kio_sequence),
+            )
             return None
 
         kio_id = kio_sequence[current_step]
@@ -72,7 +76,9 @@ class TaskScheduler:
         # skip capability check to avoid blocking config-driven pipelines.
         registered = agent_registry._agents
         if not registered:
-            logger.debug("[task_scheduler] registry empty — skipping capability check for {}", kio_id)
+            logger.debug(
+                "[task_scheduler] registry empty — skipping capability check for {}", kio_id
+            )
             return kio_id
 
         # Registry has agents: require the target KIO to be alive.
@@ -87,13 +93,12 @@ class TaskScheduler:
         # task_type equal to the kio_id (loose match — works with default descriptors).
         agent_info = registered.get(kio_id, {})
         supported = agent_info.get("supported_tasks", [])
-        capable = not supported or any(
-            t.get("task_type") == kio_id for t in supported
-        )
+        capable = not supported or any(t.get("task_type") == kio_id for t in supported)
         if not capable:
             logger.warning(
                 "[task_scheduler] {} alive but no supported_task matches '{}' — TASK_NO_CAPABLE_AGENT",
-                kio_id, kio_id,
+                kio_id,
+                kio_id,
             )
             return None
 
@@ -115,8 +120,11 @@ class TaskScheduler:
                 continue
             for task in agent.get("supported_tasks", []):
                 if task.get("task_type") == task_type:
-                    logger.debug("[task_scheduler] found alternate agent {} for {}",
-                                 agent["kio_id"], task_type)
+                    logger.debug(
+                        "[task_scheduler] found alternate agent {} for {}",
+                        agent["kio_id"],
+                        task_type,
+                    )
                     return agent["kio_id"]
         return None
 

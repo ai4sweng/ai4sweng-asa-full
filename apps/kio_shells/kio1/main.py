@@ -12,6 +12,7 @@ Supported intents (auto-detected from the prompt language):
   full_pipeline     → ["kio1", "kio3", "kio4", "kio5", "kio6", "kio7", "kio8"]
   report_only       → ["kio1", "kio8"]
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -99,12 +100,12 @@ _FALLBACK_SEQUENCE = ["kio1", "kio5"]
 _FALLBACK_HITL = ["kio5"]
 
 _KNOWN_SEQUENCES = {
-    "bug_detect":    (["kio1", "kio5"],                          ["kio5"]),
-    "bug_and_patch": (["kio1", "kio5", "kio6", "kio7"],          ["kio5"]),
-    "test_gen":      (["kio1", "kio4"],                          []),
-    "analyze":       (["kio1", "kio3", "kio5"],                  ["kio5"]),
+    "bug_detect": (["kio1", "kio5"], ["kio5"]),
+    "bug_and_patch": (["kio1", "kio5", "kio6", "kio7"], ["kio5"]),
+    "test_gen": (["kio1", "kio4"], []),
+    "analyze": (["kio1", "kio3", "kio5"], ["kio5"]),
     "full_pipeline": (["kio1", "kio3", "kio4", "kio5", "kio6", "kio7", "kio8"], ["kio5"]),
-    "report_only":   (["kio1", "kio8"],                          []),
+    "report_only": (["kio1", "kio8"], []),
 }
 
 
@@ -126,7 +127,9 @@ async def handler(envelope: MessageEnvelope) -> dict:
         llm_override = payload.get("llm_provider_override", "")
         provider = await _get_provider(llm_override)
 
-        code_section = f"\n\nProvided code:\n```\n{code[:3000]}\n```" if code else "\n\n(No code provided)"
+        code_section = (
+            f"\n\nProvided code:\n```\n{code[:3000]}\n```" if code else "\n\n(No code provided)"
+        )
         user_prompt = f"User request: {description}{code_section}"
 
         response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
@@ -151,7 +154,9 @@ async def handler(envelope: MessageEnvelope) -> dict:
         logger.warning("[kio1] LLM routing failed ({}), using fallback", exc)
         used_fallback = True
 
-    logger.info("[kio1] Route: {} hitl_after={} fallback={}", kio_sequence, hitl_after, used_fallback)
+    logger.info(
+        "[kio1] Route: {} hitl_after={} fallback={}", kio_sequence, hitl_after, used_fallback
+    )
 
     artifact_data = {
         "kio": KIO_ID,

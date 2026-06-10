@@ -28,9 +28,7 @@ def _salvage_findings(
             errors.append(f"findings[{index}]: expected object")
             continue
         try:
-            normalized = normalize_finding_dict(
-                item, default_file_path=default_file_path
-            )
+            normalized = normalize_finding_dict(item, default_file_path=default_file_path)
             salvaged.append(RepoFinding.model_validate(normalized))
         except ValidationError as exc:
             errors.append(f"findings[{index}]: {exc}")
@@ -54,9 +52,7 @@ def parse_file_findings(
     try:
         return RepoFileFindingsResponse.model_validate(data), None
     except ValidationError:
-        salvaged, item_errors = _salvage_findings(
-            data, default_file_path=default_file_path
-        )
+        salvaged, item_errors = _salvage_findings(data, default_file_path=default_file_path)
         if salvaged:
             note = f"Salvaged {len(salvaged)} findings; dropped {len(item_errors)}"
             if item_errors:

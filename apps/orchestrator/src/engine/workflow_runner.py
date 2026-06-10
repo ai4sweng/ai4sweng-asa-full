@@ -12,6 +12,7 @@ The compiled graph must be built AFTER the event loop is running (so the async
 checkpointer can be awaited).  ``_get_graph()`` initialises on first call and is
 protected by an asyncio.Lock to guard against concurrent first calls.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -72,9 +73,14 @@ class WorkflowRunner:
             if self._graph is not None:  # double-checked locking
                 return self._graph
             from .checkpointer import get_checkpointer
+
             checkpointer = await get_checkpointer()
             self._graph = build_workflow_graph(
-                self._sm, self._kio, self._lm, self._bus, self._active,
+                self._sm,
+                self._kio,
+                self._lm,
+                self._bus,
+                self._active,
                 checkpointer=checkpointer,
             )
             logger.info(
@@ -103,6 +109,7 @@ class WorkflowRunner:
         """Create a session and start async graph execution. Returns session_id."""
         import uuid as _uuid
         from datetime import datetime, timezone, timedelta
+
         correlation_id = str(_uuid.uuid4())
 
         session = await self._sm.create_session(owner=owner, workflow_id=workflow_id)
@@ -131,14 +138,22 @@ class WorkflowRunner:
             "timeout_seconds": timeout_seconds,
             "priority": priority,
         }
-        self._emit("SESSION_CREATED", session_id,
-                   f"Session {session_id[:8]}… queued",
-                   {"workflow_id": workflow_id, "description": description,
-                    "status": "QUEUED", "timeout_seconds": timeout_seconds})
+        self._emit(
+            "SESSION_CREATED",
+            session_id,
+            f"Session {session_id[:8]}… queued",
+            {
+                "workflow_id": workflow_id,
+                "description": description,
+                "status": "QUEUED",
+                "timeout_seconds": timeout_seconds,
+            },
+        )
 
         # Notify orchestrator state machine
         try:
             from .orchestrator_state import get_orchestrator_sm
+
             get_orchestrator_sm().workflow_submitted()
         except Exception:
             pass
@@ -187,10 +202,17 @@ class WorkflowRunner:
             return
 
         non_terminal = [
-            s for s in all_sessions
-            if s.get("status") in (
-                "ACTIVE", "PENDING_REVIEW",
-                "QUEUED", "VALIDATING", "READY", "RUNNING", "BLOCKED",
+            s
+            for s in all_sessions
+            if s.get("status")
+            in (
+                "ACTIVE",
+                "PENDING_REVIEW",
+                "QUEUED",
+                "VALIDATING",
+                "READY",
+                "RUNNING",
+                "BLOCKED",
             )
         ]
         if not non_terminal:
@@ -209,7 +231,9 @@ class WorkflowRunner:
             try:
                 gs = await graph.aget_state(config)
             except Exception as exc:
-                logger.warning("[rehydrate] Cannot load graph state for {}: {}", session_id[:8], exc)
+                logger.warning(
+                    "[rehydrate] Cannot load graph state for {}: {}", session_id[:8], exc
+                )
                 continue
 
             if not gs or not gs.values:
@@ -240,14 +264,14 @@ class WorkflowRunner:
             restored += 1
             logger.info(
                 "[rehydrate] Restored session {} status={} ckpt={}",
-                session_id[:8], status, pending_ckpt,
+                session_id[:8],
+                status,
+                pending_ckpt,
             )
 
         logger.info("[rehydrate] Restored {}/{} in-flight session(s)", restored, len(non_terminal))
 
-    async def approve(
-        self, session_id: str, *, actor: str, feedback: str
-    ) -> dict[str, Any] | None:
+    async def approve(self, session_id: str, *, actor: str, feedback: str) -> dict[str, Any] | None:
         """Resume the interrupted graph after human approval.
 
         Resolves the HITL checkpoint in Session Manager, then feeds the human
@@ -267,9 +291,12 @@ class WorkflowRunner:
         await self._sm.resolve_checkpoint(
             session_id, checkpoint_id, action="APPROVED", actor=actor, feedback=feedback
         )
-        self._emit("HITL_APPROVED", session_id,
-                   "Approved — resuming workflow.",
-                   {"checkpoint_id": checkpoint_id, "actor": actor})
+        self._emit(
+            "HITL_APPROVED",
+            session_id,
+            "Approved — resuming workflow.",
+            {"checkpoint_id": checkpoint_id, "actor": actor},
+        )
 
         config = {"configurable": {"thread_id": session_id}}
         asyncio.create_task(self._resume_graph(session_id, feedback, config))
@@ -279,9 +306,7 @@ class WorkflowRunner:
     # Internal graph execution
     # ------------------------------------------------------------------
 
-    async def _run_graph(
-        self, session_id: str, initial_input: dict, config: dict
-    ) -> None:
+    async def _run_graph(self, session_id: str, initial_input: dict, config: dict) -> None:
         """Invoke the graph from the start; handle interrupt vs completion.
 
         The per-session lock ensures only one ainvoke() runs at a time for a
@@ -289,7 +314,9 @@ class WorkflowRunner:
         """
         lock = self._get_session_lock(session_id)
         if lock.locked():
-            logger.warning("[{}] _run_graph called while session already running — skipped", session_id[:8])
+            logger.warning(
+                "[{}] _run_graph called while session already running — skipped", session_id[:8]
+            )
             return
         async with lock:
             try:
@@ -299,25 +326,24 @@ class WorkflowRunner:
             except Exception as exc:
                 await self._handle_failure(session_id, exc)
 
-    async def _resume_graph(
-        self, session_id: str, feedback: str, config: dict
-    ) -> None:
+    async def _resume_graph(self, session_id: str, feedback: str, config: dict) -> None:
         """Resume a previously interrupted graph with human feedback.
 
         The per-session lock prevents a double-approve race (e.g. two concurrent
         approve() calls for the same session would run the graph twice).
         """
         from langgraph.types import Command  # local import — keeps cold-start fast
+
         lock = self._get_session_lock(session_id)
         if lock.locked():
-            logger.warning("[{}] _resume_graph called while session already running — skipped", session_id[:8])
+            logger.warning(
+                "[{}] _resume_graph called while session already running — skipped", session_id[:8]
+            )
             return
         async with lock:
             try:
                 graph = await self._get_graph()
-                await graph.ainvoke(
-                    Command(resume=feedback or "approved"), config=config
-                )
+                await graph.ainvoke(Command(resume=feedback or "approved"), config=config)
                 await self._check_graph_state(session_id, config)
             except Exception as exc:
                 await self._handle_failure(session_id, exc)
@@ -356,18 +382,21 @@ class WorkflowRunner:
                 await self._sm.update_status(session_id, "TIMEOUT")
             except Exception:
                 pass
-            self._emit("WORKFLOW_TIMEOUT", session_id,
-                       "Workflow timed out — deadline exceeded",
-                       {"error": "TASK_TIMEOUT", "status": "TIMEOUT"})
+            self._emit(
+                "WORKFLOW_TIMEOUT",
+                session_id,
+                "Workflow timed out — deadline exceeded",
+                {"error": "TASK_TIMEOUT", "status": "TIMEOUT"},
+            )
             # Transition immediately to FAILED (terminal)
             state["status"] = "FAILED"
             try:
                 await self._sm.update_status(session_id, "FAILED")
             except Exception:
                 pass
-            self._emit("WORKFLOW_FAILED", session_id,
-                       "Workflow FAILED after timeout",
-                       {"error": reason})
+            self._emit(
+                "WORKFLOW_FAILED", session_id, "Workflow FAILED after timeout", {"error": reason}
+            )
         else:
             logger.warning("[{}] Session cancelled: {}", session_id[:8], reason)
             state["status"] = "CANCELLED"
@@ -375,13 +404,17 @@ class WorkflowRunner:
                 await self._sm.update_status(session_id, "CANCELLED")
             except Exception:
                 pass
-            self._emit("WORKFLOW_CANCELLED", session_id,
-                       "Workflow cancelled",
-                       {"reason": reason, "status": "CANCELLED"})
+            self._emit(
+                "WORKFLOW_CANCELLED",
+                session_id,
+                "Workflow cancelled",
+                {"reason": reason, "status": "CANCELLED"},
+            )
 
         self._cleanup_session(session_id)
         try:
             from .orchestrator_state import get_orchestrator_sm
+
             get_orchestrator_sm().workflow_finished()
         except Exception:
             pass
@@ -394,14 +427,14 @@ class WorkflowRunner:
             await self._sm.update_status(session_id, "FAILED")
         except Exception:
             pass
-        self._emit("WORKFLOW_FAILED", session_id,
-                   f"Workflow FAILED: {exc}", {"error": str(exc)})
+        self._emit("WORKFLOW_FAILED", session_id, f"Workflow FAILED: {exc}", {"error": str(exc)})
 
         # Phase 6: trigger compensation for any artifacts registered before the failure
         artifact_ids: list[str] = state.get("artifacts", [])
         if artifact_ids:
             try:
                 from .compensation_engine import get_compensation_engine
+
                 engine = get_compensation_engine(
                     session_client=self._sm,
                     emit_fn=self._emit,
@@ -414,6 +447,7 @@ class WorkflowRunner:
         self._cleanup_session(session_id)
         try:
             from .orchestrator_state import get_orchestrator_sm
+
             get_orchestrator_sm().workflow_finished()
         except Exception:
             pass
@@ -459,6 +493,7 @@ async def init_runner() -> WorkflowRunner:
         from ..services.lm_client import get_lm_client
         from ..services.session_client import get_session_client
         from .event_bus import get_event_bus
+
         _runner = WorkflowRunner(
             session_client=get_session_client(),
             kio_client=get_kio_client(),

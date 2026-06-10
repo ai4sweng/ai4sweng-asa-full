@@ -4,6 +4,7 @@ Each node is a coroutine that receives the full WorkflowGraphState and returns
 a partial dict with only the keys it wants to update.  Service clients and the
 event bus are injected via closures built by ``make_nodes()``.
 """
+
 from __future__ import annotations
 
 import time
@@ -44,23 +45,33 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
             # Pipeline already provided — skip validation, mark READY
             if session_id in active:
                 active[session_id]["status"] = "READY"
-            _emit("WORKFLOW_READY", session_id,
-                  f"Pipeline ready: {' → '.join(k.upper() for k in state['kio_sequence'])}",
-                  {"kio_sequence": state["kio_sequence"]})
+            _emit(
+                "WORKFLOW_READY",
+                session_id,
+                f"Pipeline ready: {' → '.join(k.upper() for k in state['kio_sequence'])}",
+                {"kio_sequence": state["kio_sequence"]},
+            )
             return {}
         # Need LM planning — transition to VALIDATING (Slide 19)
         if session_id in active:
             active[session_id]["status"] = "VALIDATING"
-        _emit("WORKFLOW_VALIDATING", session_id,
-              "Validating workflow description and planning pipeline…")
+        _emit(
+            "WORKFLOW_VALIDATING",
+            session_id,
+            "Validating workflow description and planning pipeline…",
+        )
         kio_seq, reasoning = await lm.plan_workflow(state["description"], session_id)
         arrow = " → ".join(k.upper() for k in kio_seq)
         if session_id in active:
             active[session_id]["kio_sequence"] = kio_seq
             active[session_id]["total"] = len(kio_seq)
             active[session_id]["status"] = "READY"
-        _emit("WORKFLOW_READY", session_id, f"Pipeline ready: {arrow}",
-              {"kio_sequence": kio_seq, "reasoning": reasoning})
+        _emit(
+            "WORKFLOW_READY",
+            session_id,
+            f"Pipeline ready: {arrow}",
+            {"kio_sequence": kio_seq, "reasoning": reasoning},
+        )
         return {"kio_sequence": kio_seq}
 
     # ------------------------------------------------------------------
@@ -77,37 +88,44 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
         # 4.2 / 4.3: TaskScheduler decides which KIO to dispatch (capability check)
         from .task_scheduler import get_task_scheduler
         from .agent_registry import get_agent_registry
+
         scheduler = get_task_scheduler()
         registry = get_agent_registry()
         kio_id = scheduler.schedule(kio_seq, step, registry)
         if kio_id is None:
             target_kio = kio_seq[step] if step < len(kio_seq) else "unknown"
-            _emit("TASK_NO_CAPABLE_AGENT", session_id,
-                  f"No capable agent available for {target_kio.upper()} (step {step + 1})",
-                  {"kio": target_kio, "step": step + 1, "status": "NO_CAPABLE_AGENT"})
+            _emit(
+                "TASK_NO_CAPABLE_AGENT",
+                session_id,
+                f"No capable agent available for {target_kio.upper()} (step {step + 1})",
+                {"kio": target_kio, "step": step + 1, "status": "NO_CAPABLE_AGENT"},
+            )
             raise RuntimeError(
                 f"No capable agent for step {step + 1} ({target_kio}): "
                 "agent stale or capability mismatch — will retry if configured"
             )
 
-        _emit("KIO_STARTED", session_id,
-              f"Initiating {kio_id.upper()}… ({step + 1}/{len(kio_seq)})",
-              {"kio": kio_id, "step": step + 1, "total": len(kio_seq)})
+        _emit(
+            "KIO_STARTED",
+            session_id,
+            f"Initiating {kio_id.upper()}… ({step + 1}/{len(kio_seq)})",
+            {"kio": kio_id, "step": step + 1, "total": len(kio_seq)},
+        )
         if session_id in active:
             active[session_id]["active_kio"] = kio_id
             active[session_id]["progress"] = step
             active[session_id]["status"] = "RUNNING"
-        _emit("WORKFLOW_RUNNING", session_id,
-              f"Executing step {step + 1}/{len(kio_seq)} — {kio_id.upper()}",
-              {"kio": kio_id, "step": step + 1})
-
-        last_artifact = (
-            state.get("last_result", {}).get("payload", {}).get("artifact_data", {})
+        _emit(
+            "WORKFLOW_RUNNING",
+            session_id,
+            f"Executing step {step + 1}/{len(kio_seq)} — {kio_id.upper()}",
+            {"kio": kio_id, "step": step + 1},
         )
+
+        last_artifact = state.get("last_result", {}).get("payload", {}).get("artifact_data", {})
         # Phase 10.3: typed artifact references for all upstream outputs
         input_artifacts = [
-            {"artifact_id": aid, "artifact_type": "json"}
-            for aid in state.get("artifacts", [])
+            {"artifact_id": aid, "artifact_type": "json"} for aid in state.get("artifacts", [])
         ]
         step_id = f"step_{step + 1}_{kio_id}"
         correlation_id = state.get("correlation_id", "")
@@ -116,12 +134,16 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
         # Emit DISPATCHED before the blocking execute call
         if session_id in active:
             active[session_id]["status"] = "DISPATCHED"
-        _emit("KIO_DISPATCHED", session_id,
-              f"[{kio_id.upper()}] Dispatching job… (step {step + 1}/{len(kio_seq)})",
-              {"kio": kio_id, "step": step + 1, "step_id": step_id, "correlation_id": correlation_id})
+        _emit(
+            "KIO_DISPATCHED",
+            session_id,
+            f"[{kio_id.upper()}] Dispatching job… (step {step + 1}/{len(kio_seq)})",
+            {"kio": kio_id, "step": step + 1, "step_id": step_id, "correlation_id": correlation_id},
+        )
 
         retry_policy = {"max_retries": 1, "backoff_strategy": "exponential"}
         from .retry_manager import get_retry_manager
+
         rm = get_retry_manager()
         rm.register(session_id, retry_policy)
 
@@ -137,16 +159,16 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
                         "description": state["description"],
                         "working_directory": state["working_directory"],
                         "feedback": state.get("feedback", ""),
-                        "last_artifact": last_artifact,         # backward compat
-                        "input_artifacts": input_artifacts,     # Phase 10.3: typed refs
+                        "last_artifact": last_artifact,  # backward compat
+                        "input_artifacts": input_artifacts,  # Phase 10.3: typed refs
                         "initial_context": state.get("initial_context", {}),
                         "llm_provider_override": state.get("llm_provider_override", ""),
                         "retry_policy": retry_policy,
                         "timeout_seconds": state.get("timeout_seconds"),  # per-task (Slide 8)
                         "step_id": step_id,
-                        "task_id": step_id,                     # Phase 10.1: explicit task_id
-                        "priority": state.get("priority", 5),   # Phase 10.2: dispatch priority
-                        "expected_outputs": ["artifact"],        # Phase 10.4
+                        "task_id": step_id,  # Phase 10.1: explicit task_id
+                        "priority": state.get("priority", 5),  # Phase 10.2: dispatch priority
+                        "expected_outputs": ["artifact"],  # Phase 10.4
                     },
                     correlation_id=correlation_id,
                     step_id=step_id,
@@ -157,7 +179,7 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
                 cfg = get_settings()
 
                 # Check if the error payload says retryable=true
-                retryable = getattr(exc, "retryable", False)
+                getattr(exc, "retryable", False)
                 # Also check if it's a plain exception we should retry (not HITL path)
                 already_retried = bool(state.get("llm_provider_override"))
 
@@ -165,13 +187,23 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
                     attempt = await rm.wait_and_increment(session_id)
                     if session_id in active:
                         active[session_id]["status"] = "RETRYING"
-                    _emit("TASK_RETRYING", session_id,
-                          f"[{kio_id.upper()}] Retrying (attempt {attempt}/{retry_policy['max_retries']})…",
-                          {"kio": kio_id, "attempt": attempt,
-                           "max_retries": retry_policy["max_retries"], "error": str(exc)})
+                    _emit(
+                        "TASK_RETRYING",
+                        session_id,
+                        f"[{kio_id.upper()}] Retrying (attempt {attempt}/{retry_policy['max_retries']})…",
+                        {
+                            "kio": kio_id,
+                            "attempt": attempt,
+                            "max_retries": retry_policy["max_retries"],
+                            "error": str(exc),
+                        },
+                    )
                     logger.warning(
                         "[{}] {} failed (attempt {}), retrying: {}",
-                        session_id[:8], kio_id, attempt, exc,
+                        session_id[:8],
+                        kio_id,
+                        attempt,
+                        exc,
                     )
                     if session_id in active:
                         active[session_id]["status"] = "RUNNING"
@@ -181,11 +213,17 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
                 if cfg.llm_provider_fallback and not already_retried:
                     logger.warning(
                         "[{}] {} failed with primary LLM ({}); offering HITL fallback to {}",
-                        session_id[:8], kio_id, exc, cfg.llm_provider_fallback,
+                        session_id[:8],
+                        kio_id,
+                        exc,
+                        cfg.llm_provider_fallback,
                     )
-                    _emit("KIO_FAILED", session_id,
-                          f"[{kio_id.upper()}] failed — offering switch to {cfg.llm_provider_fallback}",
-                          {"kio": kio_id, "error": str(exc)})
+                    _emit(
+                        "KIO_FAILED",
+                        session_id,
+                        f"[{kio_id.upper()}] failed — offering switch to {cfg.llm_provider_fallback}",
+                        {"kio": kio_id, "error": str(exc)},
+                    )
                     return {
                         "last_result": {
                             "payload": {
@@ -233,7 +271,9 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
             # from Session Manager. Log as error so operators can investigate.
             logger.error(
                 "[{}] Failed to register artifact for {} ({}); workflow continues",
-                session_id[:8], kio_id, reg_exc,
+                session_id[:8],
+                kio_id,
+                reg_exc,
             )
 
         # If this KIO returned a dynamic pipeline, update the sequence in state.
@@ -245,14 +285,26 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
             if session_id in active:
                 active[session_id]["kio_sequence"] = new_seq
                 active[session_id]["total"] = len(new_seq)
-            await sm.update_progress(session_id, {
-                "completed_kios": step + 1,
-                "total_kios": len(new_seq),
-                "last_kio": kio_id,
-            })
-            _emit("KIO_DONE", session_id, f"[{kio_id.upper()}] {kio_message}",
-                  {"kio": kio_id, "artifact_id": artifact_id, "step": step + 1,
-                   "execution_time_ms": execution_time_ms, "kio_sequence": new_seq})
+            await sm.update_progress(
+                session_id,
+                {
+                    "completed_kios": step + 1,
+                    "total_kios": len(new_seq),
+                    "last_kio": kio_id,
+                },
+            )
+            _emit(
+                "KIO_DONE",
+                session_id,
+                f"[{kio_id.upper()}] {kio_message}",
+                {
+                    "kio": kio_id,
+                    "artifact_id": artifact_id,
+                    "step": step + 1,
+                    "execution_time_ms": execution_time_ms,
+                    "kio_sequence": new_seq,
+                },
+            )
             update: dict = {
                 "last_result": result,
                 "artifacts": [artifact_id],
@@ -263,14 +315,25 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
                 update["hitl_after"] = new_hitl
             return update
 
-        await sm.update_progress(session_id, {
-            "completed_kios": step + 1,
-            "total_kios": len(kio_seq),
-            "last_kio": kio_id,
-        })
-        _emit("KIO_DONE", session_id, f"[{kio_id.upper()}] {kio_message}",
-              {"kio": kio_id, "artifact_id": artifact_id, "step": step + 1,
-               "execution_time_ms": execution_time_ms})
+        await sm.update_progress(
+            session_id,
+            {
+                "completed_kios": step + 1,
+                "total_kios": len(kio_seq),
+                "last_kio": kio_id,
+            },
+        )
+        _emit(
+            "KIO_DONE",
+            session_id,
+            f"[{kio_id.upper()}] {kio_message}",
+            {
+                "kio": kio_id,
+                "artifact_id": artifact_id,
+                "step": step + 1,
+                "execution_time_ms": execution_time_ms,
+            },
+        )
 
         return {"last_result": result, "artifacts": [artifact_id], "feedback": ""}
 
@@ -290,8 +353,10 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
         step = state["current_step"]
         kio_id = state["kio_sequence"][step]
         artifact_id = state["artifacts"][-1] if state.get("artifacts") else str(uuid.uuid4())
-        hitl_q = state.get("last_result", {}).get("payload", {}).get(
-            "hitl_question", f"Review {kio_id.upper()} output before continuing?"
+        hitl_q = (
+            state.get("last_result", {})
+            .get("payload", {})
+            .get("hitl_question", f"Review {kio_id.upper()} output before continuing?")
         )
 
         checkpoint = await sm.create_hitl_checkpoint(
@@ -303,19 +368,32 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
             active[session_id]["status"] = "BLOCKED"  # Slide 19: BLOCKED state
             active[session_id]["pending_checkpoint_id"] = checkpoint_id
 
-        _emit("WORKFLOW_BLOCKED", session_id,
-              f"Workflow blocked — awaiting human review",
-              {"kio": kio_id, "checkpoint_id": checkpoint_id})
-        _emit("HITL_CHECKPOINT", session_id, f"[HITL] {hitl_q}",
-              {"kio": kio_id, "checkpoint_id": checkpoint_id,
-               "artifact_id": artifact_id, "hitl_question": hitl_q})
+        _emit(
+            "WORKFLOW_BLOCKED",
+            session_id,
+            "Workflow blocked — awaiting human review",
+            {"kio": kio_id, "checkpoint_id": checkpoint_id},
+        )
+        _emit(
+            "HITL_CHECKPOINT",
+            session_id,
+            f"[HITL] {hitl_q}",
+            {
+                "kio": kio_id,
+                "checkpoint_id": checkpoint_id,
+                "artifact_id": artifact_id,
+                "hitl_question": hitl_q,
+            },
+        )
 
         # Pause — LangGraph saves state to MemorySaver; runner resumes via Command(resume=…)
-        feedback = interrupt({
-            "checkpoint_id": checkpoint_id,
-            "hitl_question": hitl_q,
-            "kio": kio_id,
-        })
+        feedback = interrupt(
+            {
+                "checkpoint_id": checkpoint_id,
+                "hitl_question": hitl_q,
+                "kio": kio_id,
+            }
+        )
         return {"feedback": feedback or "", "pending_checkpoint_id": None}
 
     # ------------------------------------------------------------------
@@ -338,13 +416,20 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
             if rejected:
                 if session_id in active:
                     active[session_id]["status"] = "FAILED"
-                return {"status": "FAILED", "llm_retry_pending": False, "pending_checkpoint_id": None}
+                return {
+                    "status": "FAILED",
+                    "llm_retry_pending": False,
+                    "pending_checkpoint_id": None,
+                }
 
             fallback = cfg.llm_provider_fallback or "anthropic"
             logger.info("[{}] LLM fallback approved → retrying with {}", session_id[:8], fallback)
-            _emit("LLM_FALLBACK", session_id,
-                  f"Switching to {fallback!r} for retry…",
-                  {"fallback_provider": fallback})
+            _emit(
+                "LLM_FALLBACK",
+                session_id,
+                f"Switching to {fallback!r} for retry…",
+                {"fallback_provider": fallback},
+            )
             if session_id in active:
                 active[session_id]["llm_provider_override"] = fallback
                 active[session_id]["status"] = "ACTIVE"
@@ -377,17 +462,22 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
             active[session_id]["status"] = "COMPLETED"
             active[session_id]["progress"] = kio_count
             active[session_id]["active_kio"] = None
-        _emit("WORKFLOW_COMPLETED", session_id,
-              f"Workflow COMPLETED — {kio_count}/{kio_count} KIOs done.",
-              {"session_id": session_id})
+        _emit(
+            "WORKFLOW_COMPLETED",
+            session_id,
+            f"Workflow COMPLETED — {kio_count}/{kio_count} KIOs done.",
+            {"session_id": session_id},
+        )
         # Notify orchestrator state machine
         try:
             from .orchestrator_state import get_orchestrator_sm
+
             get_orchestrator_sm().workflow_finished()
         except Exception:
             pass
         # Clean up retry state for this session
         from .retry_manager import get_retry_manager
+
         get_retry_manager().cleanup(session_id)
         # Release in-process state after completion; durable state lives in PostgreSQL.
         active.pop(session_id, None)

@@ -14,6 +14,7 @@ Usage (from an orchestrator request handler)::
     chain = await pm.get_lineage(session_id, artifact_id)
     # chain[0] is the root (first KIO's output), chain[-1] is the requested artifact.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -58,7 +59,8 @@ class ProvenanceManager:
             if current_id in visited:
                 logger.warning(
                     "[provenance] Cycle detected at artifact {} in session {}",
-                    current_id[:8], session_id[:8],
+                    current_id[:8],
+                    session_id[:8],
                 )
                 break
             visited.add(current_id)
@@ -67,7 +69,8 @@ class ProvenanceManager:
             if not artifact:
                 logger.debug(
                     "[provenance] Artifact {} not found for session {} — chain truncated",
-                    current_id[:8], session_id[:8],
+                    current_id[:8],
+                    session_id[:8],
                 )
                 break
 
@@ -100,5 +103,6 @@ def get_provenance_manager() -> ProvenanceManager:
     global _pm
     if _pm is None:
         from ..services.session_client import get_session_client
+
         _pm = ProvenanceManager(get_session_client())
     return _pm

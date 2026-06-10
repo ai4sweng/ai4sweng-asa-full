@@ -4,6 +4,7 @@ Reads pipeline artifacts from the current workflow and generates personalised
 training materials: concept explanations, hands-on exercises, skill-gap
 assessments, and best-practice guides tailored to the work done in this session.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -112,8 +113,8 @@ def _build_pipeline_context(payload: dict) -> str:
         parts.append(f"Repository analysis found {len(findings)} issue(s):")
         for f in findings[:8]:
             parts.append(
-                f"  - [{f.get('severity','?')}] {f.get('category','?')} "
-                f"in {f.get('file','?')}:{f.get('line','?')} — {f.get('description','')}"
+                f"  - [{f.get('severity', '?')}] {f.get('category', '?')} "
+                f"in {f.get('file', '?')}:{f.get('line', '?')} — {f.get('description', '')}"
             )
 
     # kio5 bugs
@@ -123,8 +124,8 @@ def _build_pipeline_context(payload: dict) -> str:
         parts.append(f"\nBug detector confirmed {len(bugs)} bug(s):")
         for b in bugs[:6]:
             parts.append(
-                f"  - [{b.get('severity','?')}] {b.get('kind','?')} "
-                f"({b.get('cwe','')}) — {b.get('suggested_fix','')}"
+                f"  - [{b.get('severity', '?')}] {b.get('kind', '?')} "
+                f"({b.get('cwe', '')}) — {b.get('suggested_fix', '')}"
             )
 
     # kio6 patches
@@ -186,8 +187,13 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
         mod_count = len(result.get("modules", []))
         quiz_count = len(result.get("quiz", []))
-        await publish_progress(KIO_ID, envelope.session_id, 90,
-                               f"{mod_count} module(s), {quiz_count} quiz question(s)", js)
+        await publish_progress(
+            KIO_ID,
+            envelope.session_id,
+            90,
+            f"{mod_count} module(s), {quiz_count} quiz question(s)",
+            js,
+        )
         logger.info("[kio13] {} module(s), {} quiz question(s) generated", mod_count, quiz_count)
 
         return {

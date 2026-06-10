@@ -74,15 +74,15 @@ class Settings(BaseSettings):
     # ── Service hosts ─────────────────────────────────────────────────────────
     # In Docker set these to container service names (e.g. "lm_engine").
     # Locally "localhost" covers all.
-    api_host: str = "0.0.0.0"             # bind address for uvicorn in every service
+    api_host: str = "0.0.0.0"  # bind address for uvicorn in every service
     lm_engine_host: str = "localhost"
     session_manager_host: str = "localhost"
     report_tool_host: str = "localhost"
 
     # ── Service URLs (auto-computed; override for remote / Docker targets) ────
-    lm_engine_url: str = ""        # → http://{lm_engine_host}:{lm_engine_port}
+    lm_engine_url: str = ""  # → http://{lm_engine_host}:{lm_engine_port}
     session_manager_url: str = ""  # → http://{session_manager_host}:{session_manager_port}
-    report_tool_url: str = ""      # → http://{report_tool_host}:{report_tool_port}
+    report_tool_url: str = ""  # → http://{report_tool_host}:{report_tool_port}
 
     # ── LLM providers ─────────────────────────────────────────────────────────
     llm_provider: str = "ollama"
@@ -107,9 +107,19 @@ class Settings(BaseSettings):
     # All 13 KIO ports in one place.  Override the whole map via KIO_PORT_MAP
     # as a JSON string, or add individual port fields if needed.
     kio_port_map: dict[str, int] = {
-        "kio1": 8011, "kio2": 8012, "kio3": 8013, "kio4": 8014, "kio5": 8015,
-        "kio6": 8016, "kio7": 8017, "kio8": 8018, "kio9": 8019,
-        "kio10": 8020, "kio11": 8021, "kio12": 8022, "kio13": 8023,
+        "kio1": 8011,
+        "kio2": 8012,
+        "kio3": 8013,
+        "kio4": 8014,
+        "kio5": 8015,
+        "kio6": 8016,
+        "kio7": 8017,
+        "kio8": 8018,
+        "kio9": 8019,
+        "kio10": 8020,
+        "kio11": 8021,
+        "kio12": 8022,
+        "kio13": 8023,
     }
 
     # KIO base host for HTTP transport.
@@ -124,12 +134,12 @@ class Settings(BaseSettings):
 
     # ── NATS stream / consumer parameters ─────────────────────────────────────
     nats_kio_stream: str = "KIO_JOBS"
-    nats_request_timeout: int = 120       # seconds to wait for a KIO reply
-    nats_stream_max_age: int = 3600       # seconds — KIO_JOBS message TTL (dead-letter expiry)
-    nats_max_deliver: int = 3             # max redelivery attempts before drop
-    nats_fetch_timeout: float = 2.0       # seconds — pull-consumer poll interval (no-message wait)
-    nats_reconnect_wait: int = 2          # seconds between NATS reconnect attempts
-    nats_max_reconnect_attempts: int = 10 # 0 = unlimited
+    nats_request_timeout: int = 120  # seconds to wait for a KIO reply
+    nats_stream_max_age: int = 3600  # seconds — KIO_JOBS message TTL (dead-letter expiry)
+    nats_max_deliver: int = 3  # max redelivery attempts before drop
+    nats_fetch_timeout: float = 2.0  # seconds — pull-consumer poll interval (no-message wait)
+    nats_reconnect_wait: int = 2  # seconds between NATS reconnect attempts
+    nats_max_reconnect_attempts: int = 10  # 0 = unlimited
 
     # Use NATS transport?  false = HTTP-only mode (no NATS server required)
     use_nats: bool = True
@@ -144,14 +154,14 @@ class Settings(BaseSettings):
     max_active_sessions_per_user: int = 20  # max concurrent ACTIVE sessions per user
 
     # ── SSE event bus ─────────────────────────────────────────────────────────
-    sse_queue_maxsize: int = 256    # max events buffered per subscriber before drops
+    sse_queue_maxsize: int = 256  # max events buffered per subscriber before drops
     sse_heartbeat_interval: int = 15  # seconds between SSE keepalive pings
 
     # ── KIO lifecycle timing ──────────────────────────────────────────────────
-    kio_heartbeat_interval: int = 30    # seconds between KIO HEARTBEAT publishes
-    kio_capability_interval: int = 60   # seconds between CAPABILITY_ANNOUNCEMENT publishes
-    agent_stale_threshold: int = 90     # seconds without announcement → endpoint stale
-    timeout_monitor_interval: int = 5   # seconds between TimeoutMonitor deadline sweeps
+    kio_heartbeat_interval: int = 30  # seconds between KIO HEARTBEAT publishes
+    kio_capability_interval: int = 60  # seconds between CAPABILITY_ANNOUNCEMENT publishes
+    agent_stale_threshold: int = 90  # seconds without announcement → endpoint stale
+    timeout_monitor_interval: int = 5  # seconds between TimeoutMonitor deadline sweeps
 
     # ── KIO subprocess timeouts (kio7: pip install and pytest) ───────────────
     kio_subprocess_pip_timeout: int = 120  # seconds for pip install / dependency setup
@@ -161,7 +171,7 @@ class Settings(BaseSettings):
     # Set S3_ENABLED=true to offload artifact payloads to object storage.
     # Defaults to false for local dev — DB content column used as before.
     s3_enabled: bool = False
-    s3_endpoint_url: str = "http://localhost:9000"   # MinIO local; empty = AWS S3
+    s3_endpoint_url: str = "http://localhost:9000"  # MinIO local; empty = AWS S3
     s3_access_key: str = "minioadmin"
     s3_secret_key: str = "minioadmin"
     s3_bucket: str = "enisalimerge-artifacts"
@@ -204,9 +214,7 @@ class Settings(BaseSettings):
                 f"http://{self.session_manager_host}:{self.session_manager_port}"
             )
         if not self.report_tool_url:
-            self.report_tool_url = (
-                f"http://{self.report_tool_host}:{self.report_tool_port}"
-            )
+            self.report_tool_url = f"http://{self.report_tool_host}:{self.report_tool_port}"
         if not self.cors_origins:
             self.cors_origins = [
                 f"http://localhost:{self.vite_dev_port}",
@@ -221,6 +229,7 @@ class Settings(BaseSettings):
     def _reject_default_jwt_secret(cls, value: str) -> str:
         if value == "change-me-in-production":
             import sys
+
             print(
                 "\nFATAL: JWT_SECRET_KEY is set to the insecure default value.\n"
                 "Generate a secret with:  openssl rand -hex 32\n"

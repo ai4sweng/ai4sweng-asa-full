@@ -45,7 +45,7 @@ class RepoScanner:
             raise FileNotFoundError(f"Repository not found: {self._root}")
 
         result = RepoScanResult(repo_path=str(self._root))
-        app_dir = self._root / "app"
+        self._root / "app"
         tests_dir = self._root / "tests"
 
         for path in self._root.rglob("*.py"):

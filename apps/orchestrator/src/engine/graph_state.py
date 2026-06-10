@@ -1,4 +1,5 @@
 """LangGraph workflow state — single source of truth for all graph nodes."""
+
 from __future__ import annotations
 
 import operator
@@ -34,12 +35,12 @@ class WorkflowGraphState(TypedDict):
     initial_context: dict[str, Any]
 
     # --- LLM fallback (HITL-driven retry with different provider) ---
-    llm_provider_override: str   # "" = use env default, "anthropic" = use Claude fallback
-    llm_retry_pending: bool      # True when last KIO failed and is awaiting HITL retry approval
+    llm_provider_override: str  # "" = use env default, "anthropic" = use Claude fallback
+    llm_retry_pending: bool  # True when last KIO failed and is awaiting HITL retry approval
 
     # --- Tracing ---
-    correlation_id: str          # uuid generated once per workflow run; ties all envelopes together
+    correlation_id: str  # uuid generated once per workflow run; ties all envelopes together
 
     # --- Task config ---
     timeout_seconds: int | None  # per-task deadline; None = use global kio_client_timeout
-    priority: int                # dispatch priority 1 (lowest) … 10 (highest); default 5
+    priority: int  # dispatch priority 1 (lowest) … 10 (highest); default 5

@@ -10,9 +10,7 @@ from typing import Any
 
 _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
 # Python literals that small LLMs often emit instead of JSON tokens.
-_PYTHON_LITERAL_RE = re.compile(
-    r"(?<=[:,\[\s])(None|True|False)(?=\s*[,}\]\s]|$)"
-)
+_PYTHON_LITERAL_RE = re.compile(r"(?<=[:,\[\s])(None|True|False)(?=\s*[,}\]\s]|$)")
 
 
 def _replace_python_literals(text: str) -> str:
@@ -111,20 +109,10 @@ def normalize_bug_dict(data: dict[str, Any]) -> dict[str, Any]:
     out = dict(data)
 
     if not out.get("id"):
-        out["id"] = (
-            out.get("bug_id")
-            or out.get("bugId")
-            or out.get("finding_id")
-            or "BUG-UNKNOWN"
-        )
+        out["id"] = out.get("bug_id") or out.get("bugId") or out.get("finding_id") or "BUG-UNKNOWN"
 
     if not out.get("file"):
-        out["file"] = (
-            out.get("file_path")
-            or out.get("filepath")
-            or out.get("path")
-            or "unknown"
-        )
+        out["file"] = out.get("file_path") or out.get("filepath") or out.get("path") or "unknown"
 
     if out.get("line") is None and out.get("line_hint") is not None:
         out["line"] = out["line_hint"]
@@ -132,10 +120,7 @@ def normalize_bug_dict(data: dict[str, Any]) -> dict[str, Any]:
 
     if not out.get("description"):
         out["description"] = (
-            out.get("message")
-            or out.get("summary")
-            or out.get("title")
-            or "No description"
+            out.get("message") or out.get("summary") or out.get("title") or "No description"
         )
 
     if not out.get("evidence"):
@@ -144,10 +129,7 @@ def normalize_bug_dict(data: dict[str, Any]) -> dict[str, Any]:
 
     if not out.get("recommended_fix"):
         out["recommended_fix"] = (
-            out.get("fix")
-            or out.get("suggested_fix")
-            or out.get("recommendation")
-            or ""
+            out.get("fix") or out.get("suggested_fix") or out.get("recommendation") or ""
         )
     out["recommended_fix"] = coerce_to_str(out.get("recommended_fix"))
 
@@ -198,10 +180,7 @@ def normalize_finding_dict(
 
     if not out.get("recommended_fix"):
         out["recommended_fix"] = (
-            out.get("fix")
-            or out.get("suggested_fix")
-            or out.get("recommendation")
-            or ""
+            out.get("fix") or out.get("suggested_fix") or out.get("recommendation") or ""
         )
     out["recommended_fix"] = coerce_to_str(out.get("recommended_fix"))
 
@@ -230,9 +209,7 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
 
     candidates: list[str] = [stripped, repair_json_text(stripped)]
 
-    block_match = re.search(
-        r"```(?:json)?\s*(\{.*?\})\s*```", stripped, re.DOTALL | re.IGNORECASE
-    )
+    block_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", stripped, re.DOTALL | re.IGNORECASE)
     if block_match:
         candidates.insert(0, repair_json_text(block_match.group(1)))
 

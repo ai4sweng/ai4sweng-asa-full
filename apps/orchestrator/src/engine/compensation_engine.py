@@ -17,9 +17,9 @@ SSE events:
 
 Compensation is best-effort — a failure on one step never blocks the rest.
 """
+
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Callable
 
 import httpx
@@ -55,7 +55,8 @@ class CompensationEngine:
 
         logger.info(
             "[compensation] {} — compensating {} artifact(s) in reverse",
-            session_id[:8], len(artifact_ids),
+            session_id[:8],
+            len(artifact_ids),
         )
 
         # 1. Update session to COMPENSATING
@@ -65,7 +66,8 @@ class CompensationEngine:
             logger.warning("[compensation] could not set COMPENSATING status: {}", exc)
 
         self._emit(
-            "WORKFLOW_COMPENSATING", session_id,
+            "WORKFLOW_COMPENSATING",
+            session_id,
             f"Rolling back {len(artifact_ids)} artifact(s)…",
             {"session_id": session_id, "artifact_count": len(artifact_ids)},
         )
@@ -89,7 +91,8 @@ class CompensationEngine:
             logger.warning("[compensation] could not set COMPENSATED status: {}", exc)
 
         self._emit(
-            "WORKFLOW_COMPENSATED", session_id,
+            "WORKFLOW_COMPENSATED",
+            session_id,
             "Compensation complete — all artifacts rolled back.",
             {"session_id": session_id},
         )
@@ -126,7 +129,8 @@ class CompensationEngine:
 
         status = "ok" if not errors else f"partial ({'; '.join(errors)})"
         self._emit(
-            "STEP_COMPENSATED", session_id,
+            "STEP_COMPENSATED",
+            session_id,
             f"Artifact {artifact_id[:8]}… rolled back ({producer_kio or 'unknown'}) — {status}",
             {
                 "artifact_id": artifact_id,
@@ -137,12 +141,12 @@ class CompensationEngine:
         )
         logger.info(
             "[compensation] artifact {} ({}) — {}",
-            artifact_id[:8], producer_kio, status,
+            artifact_id[:8],
+            producer_kio,
+            status,
         )
 
-    async def _call_kio_delete(
-        self, kio_id: str, artifact_id: str, errors: list[str]
-    ) -> None:
+    async def _call_kio_delete(self, kio_id: str, artifact_id: str, errors: list[str]) -> None:
         """Call DELETE /artifacts/{artifact_id} on the KIO shell (best-effort)."""
         cfg = get_settings()
         host = cfg.kio_base_host or "localhost"
@@ -155,12 +159,16 @@ class CompensationEngine:
                     errors.append(f"kio_delete={resp.status_code}")
                     logger.warning(
                         "[compensation] {} DELETE {} → {}",
-                        kio_id, artifact_id[:8], resp.status_code,
+                        kio_id,
+                        artifact_id[:8],
+                        resp.status_code,
                     )
                 else:
                     logger.debug(
                         "[compensation] {} DELETE {} → {}",
-                        kio_id, artifact_id[:8], resp.status_code,
+                        kio_id,
+                        artifact_id[:8],
+                        resp.status_code,
                     )
         except Exception as exc:
             errors.append(f"kio_delete={exc}")

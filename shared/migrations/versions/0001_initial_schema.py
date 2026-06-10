@@ -106,7 +106,9 @@ def upgrade() -> None:
         sa.Column("task_id", sa.String(36), sa.ForeignKey("tasks.id"), nullable=True),
         sa.Column("kio_id", sa.String(32), nullable=True),
         sa.Column("artifact_type", sa.String(64), nullable=False),
-        sa.Column("parent_artifact_id", sa.String(36), sa.ForeignKey("artifacts.id"), nullable=True),
+        sa.Column(
+            "parent_artifact_id", sa.String(36), sa.ForeignKey("artifacts.id"), nullable=True
+        ),
         sa.Column("content", sa.JSON(), nullable=False),
         sa.Column("checksum", sa.String(64), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),

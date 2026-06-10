@@ -7,6 +7,7 @@ Safety constraints
 • Commands are passed directly to the shell — callers are responsible for
   ensuring the orchestrator is not exposed to untrusted input.
 """
+
 from __future__ import annotations
 
 import asyncio

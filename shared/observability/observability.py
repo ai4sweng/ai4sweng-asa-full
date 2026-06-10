@@ -358,9 +358,7 @@ class ObservabilityService:
         message = str(error)
         if span and span.langfuse_span:
             try:
-                span.langfuse_span.create_event(
-                    name="error", metadata={"message": message}
-                )
+                span.langfuse_span.create_event(name="error", metadata={"message": message})
             except Exception:
                 logger.exception("Langfuse error event failed")
         logger.error("Recorded error: %s", message)
@@ -529,9 +527,7 @@ class ObservabilityService:
         tokens_in = int(metrics.get("tokens_in", 0))
         tokens_out = int(metrics.get("tokens_out", 0))
         span_metadata = {
-            k: str(v)
-            for k, v in metrics.items()
-            if k not in ("tokens_in", "tokens_out")
+            k: str(v) for k, v in metrics.items() if k not in ("tokens_in", "tokens_out")
         }
 
         try:

@@ -28,6 +28,7 @@ class BaseArtifact(BaseModel):
 # KIO2 — Requirements / Issue Analysis
 # ---------------------------------------------------------------------------
 
+
 class IssueArtifact(BaseArtifact):
     producer_kio: str = "kio2"
     description: str
@@ -39,6 +40,7 @@ class IssueArtifact(BaseArtifact):
 # ---------------------------------------------------------------------------
 # KIO3 — Repository Analysis
 # ---------------------------------------------------------------------------
+
 
 class Finding(BaseModel):
     file_path: str
@@ -61,6 +63,7 @@ class RepoAnalysisArtifact(BaseArtifact):
 # KIO4 — Test Generation
 # ---------------------------------------------------------------------------
 
+
 class GeneratedTestsArtifact(BaseArtifact):
     producer_kio: str = "kio4"
     test_file_path: str
@@ -72,6 +75,7 @@ class GeneratedTestsArtifact(BaseArtifact):
 # ---------------------------------------------------------------------------
 # KIO5 — Bug Detection
 # ---------------------------------------------------------------------------
+
 
 class Bug(BaseModel):
     bug_id: str
@@ -93,6 +97,7 @@ class BugReportArtifact(BaseArtifact):
 # KIO6 — Patch Generation
 # ---------------------------------------------------------------------------
 
+
 class PatchArtifact(BaseArtifact):
     producer_kio: str = "kio6"
     patches: dict[str, str] = Field(default_factory=dict)  # file_path → patch content
@@ -102,6 +107,7 @@ class PatchArtifact(BaseArtifact):
 # ---------------------------------------------------------------------------
 # KIO7 — Code Generation
 # ---------------------------------------------------------------------------
+
 
 class CodeArtifact(BaseArtifact):
     producer_kio: str = "kio7"
@@ -115,6 +121,7 @@ class CodeArtifact(BaseArtifact):
 # KIO8 — Code Review / Static Analysis
 # ---------------------------------------------------------------------------
 
+
 class ReviewArtifact(BaseArtifact):
     producer_kio: str = "kio8"
     verdict: str  # APPROVED | CHANGES_REQUESTED
@@ -126,6 +133,7 @@ class ReviewArtifact(BaseArtifact):
 # KIO9 — Reporting
 # ---------------------------------------------------------------------------
 
+
 class ReportArtifact(BaseArtifact):
     producer_kio: str = "kio9"
     report_type: str  # FINAL | REJECTION | SUMMARY
@@ -136,6 +144,7 @@ class ReportArtifact(BaseArtifact):
 # ---------------------------------------------------------------------------
 # KIO10–KIO13 — Domain-specific (UC4 battery / benchmarking)
 # ---------------------------------------------------------------------------
+
 
 class BenchmarkArtifact(BaseArtifact):
     producer_kio: str

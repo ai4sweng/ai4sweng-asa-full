@@ -6,6 +6,7 @@ stores content directly as before (backward-compatible).
 
 Key format:  artifacts/{workflow_id}/{artifact_id}.json
 """
+
 from __future__ import annotations
 
 import json

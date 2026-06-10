@@ -3,6 +3,7 @@
 Aggregates kio7 test results (via last_artifact) and generates a structured,
 human-readable evidence report suitable for audit and sign-off.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -87,12 +88,12 @@ async def handler(envelope: MessageEnvelope) -> dict:
     _js = None
     try:
         from shared.messaging.jetstream import get_jetstream
+
         _js = await get_jetstream()
     except Exception:
         pass
 
-    await publish_progress(KIO_ID, envelope.session_id, 10,
-                           "Compiling pipeline evidence…", _js)
+    await publish_progress(KIO_ID, envelope.session_id, 10, "Compiling pipeline evidence…", _js)
 
     report: dict = {}
 
@@ -103,8 +104,10 @@ async def handler(envelope: MessageEnvelope) -> dict:
         context = {
             "task": description,
             "test_results": {
-                "passed": passed, "failed": failed,
-                "total": total, "coverage_pct": coverage,
+                "passed": passed,
+                "failed": failed,
+                "total": total,
+                "coverage_pct": coverage,
             },
             "interpretation": interpretation,
             "pipeline": ["kio2", "kio3", "kio4", "kio5", "kio6", "kio7", "kio8"],
@@ -115,8 +118,9 @@ async def handler(envelope: MessageEnvelope) -> dict:
             "Generate the evidence report."
         )
 
-        await publish_progress(KIO_ID, envelope.session_id, 45,
-                               "Generating evidence report with LLM…", _js)
+        await publish_progress(
+            KIO_ID, envelope.session_id, 45, "Generating evidence report with LLM…", _js
+        )
         response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
         await publish_progress(KIO_ID, envelope.session_id, 80, "Parsing report…", _js)
         report = json.loads(_strip_fences(response.content))

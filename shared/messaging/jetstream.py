@@ -17,6 +17,7 @@ Request-reply pattern
   The reply is ephemeral: orchestrator must be alive to receive it.
   Phase 8 (PostgreSQL checkpointer) will make the orchestrator crash-safe.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,7 +30,7 @@ import nats.errors
 import nats.js.errors
 from nats.aio.client import Client as NatsClient
 from nats.js import JetStreamContext
-from nats.js.api import ConsumerConfig, RetentionPolicy, StorageType, StreamConfig
+from nats.js.api import RetentionPolicy, StorageType, StreamConfig
 from loguru import logger
 
 from shared.config import get_settings
@@ -62,6 +63,7 @@ class JetStreamManager:
             await self._js.stream_info(name)
             logger.debug("JetStream stream '{}' already exists", name)
         except nats.js.errors.NotFoundError:
+            cfg = get_settings()
             stream_config = StreamConfig(
                 name=name,
                 subjects=["kio.*.request"],
@@ -156,8 +158,13 @@ class JetStreamManager:
                 filter_subject=f"kio.{kio_id}.request",
             ),
         )
-        logger.info("[{}] JetStream pull consumer '{}' active (max_deliver={} ack_wait={}s)",
-                    kio_id, durable, cfg.nats_max_deliver, ack_wait_s)
+        logger.info(
+            "[{}] JetStream pull consumer '{}' active (max_deliver={} ack_wait={}s)",
+            kio_id,
+            durable,
+            cfg.nats_max_deliver,
+            ack_wait_s,
+        )
 
         async def _poll_loop() -> None:
             while True:

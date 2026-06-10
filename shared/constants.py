@@ -212,24 +212,28 @@ REPO_ARTIFACT_LINEAGE_ORDER: list[ArtifactType] = [
     ArtifactType.EVIDENCE_REPORT,
 ]
 
-REPO_COMPLETION_SUBJECTS: frozenset[str] = frozenset({
-    NatsSubject.REPO_ANALYSIS_COMPLETED.value,
-    NatsSubject.REPO_TESTS_GENERATED.value,
-    NatsSubject.REPO_BUGS_DETECTED.value,
-    NatsSubject.REPO_PATCH_GENERATED.value,
-    NatsSubject.REPO_TESTS_RERUN.value,
-    NatsSubject.REPO_EVIDENCE_REPORTED.value,
-})
+REPO_COMPLETION_SUBJECTS: frozenset[str] = frozenset(
+    {
+        NatsSubject.REPO_ANALYSIS_COMPLETED.value,
+        NatsSubject.REPO_TESTS_GENERATED.value,
+        NatsSubject.REPO_BUGS_DETECTED.value,
+        NatsSubject.REPO_PATCH_GENERATED.value,
+        NatsSubject.REPO_TESTS_RERUN.value,
+        NatsSubject.REPO_EVIDENCE_REPORTED.value,
+    }
+)
 
-REPO_PRIMARY_SUBJECTS: frozenset[str] = frozenset({
-    NatsSubject.REPO_WORKFLOW_START.value,
-    NatsSubject.REPO_ANALYSIS_COMPLETED.value,
-    NatsSubject.REPO_TESTS_GENERATED.value,
-    NatsSubject.REPO_BUGS_DETECTED.value,
-    NatsSubject.REPO_PATCH_GENERATED.value,
-    NatsSubject.REPO_TESTS_RERUN.value,
-    NatsSubject.REPO_EVIDENCE_REPORTED.value,
-})
+REPO_PRIMARY_SUBJECTS: frozenset[str] = frozenset(
+    {
+        NatsSubject.REPO_WORKFLOW_START.value,
+        NatsSubject.REPO_ANALYSIS_COMPLETED.value,
+        NatsSubject.REPO_TESTS_GENERATED.value,
+        NatsSubject.REPO_BUGS_DETECTED.value,
+        NatsSubject.REPO_PATCH_GENERATED.value,
+        NatsSubject.REPO_TESTS_RERUN.value,
+        NatsSubject.REPO_EVIDENCE_REPORTED.value,
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Error Codes
@@ -287,8 +291,7 @@ REPO_AUDIT_WORKFLOW_NAME: str = "repo_audit_fastapi_demo"
 
 # Human approval prompt shown after DebuggerAgent — orchestrator CLI.
 HUMAN_APPROVAL_PROMPT: str = (
-    "Debugger found an off-by-one bug.\n\nApprove automatic fix?\n\n"
-    "[y] Approve\n[n] Reject"
+    "Debugger found an off-by-one bug.\n\nApprove automatic fix?\n\n[y] Approve\n[n] Reject"
 )
 
 REPO_HUMAN_APPROVAL_PROMPT: str = (

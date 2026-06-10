@@ -24,6 +24,7 @@ Fallback
   If PostgreSQL is unreachable at startup, a MemorySaver is used instead and
   a warning is emitted.  This allows local dev without a running database.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -76,6 +77,7 @@ async def init_checkpointer():
                 exc,
             )
             from langgraph.checkpoint.memory import MemorySaver
+
             _checkpointer = MemorySaver()
 
     return _checkpointer

@@ -1,4 +1,5 @@
 """LM Engine inference router — delegates to shared.llm.factory."""
+
 from __future__ import annotations
 
 import asyncio
@@ -21,6 +22,7 @@ async def _get_provider():
         async with _provider_lock:
             if _provider is None:  # double-check after acquiring lock
                 from shared.llm.factory import create_llm_provider
+
                 _provider = await create_llm_provider()
     return _provider
 
