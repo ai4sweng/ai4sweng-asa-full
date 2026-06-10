@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 import uvicorn
 from loguru import logger
 
-from kio_base import MessageEnvelope, make_kio_app, publish_progress
+from kio_base import MessageEnvelope, make_kio_app, make_session_reader, publish_progress
 from shared.llm.factory import create_llm_provider
 from shared.config import get_settings
 
@@ -89,6 +89,25 @@ async def handler(envelope: MessageEnvelope) -> dict:
     # kio1 (router) passes raw code directly when no upstream findings exist
     findings = last_artifact.get("findings", [])
     raw_code = last_artifact.get("code", "") or payload.get("initial_context", {}).get("code", "")
+
+    # When the orchestrator sends input_artifact refs instead of inlining data,
+    # pull those payloads from Session Manager — which reads PostgreSQL.
+    # This keeps DB credentials entirely out of KIO containers.
+    if not findings and not raw_code:
+        input_refs = payload.get("input_artifacts", [])
+        if input_refs:
+            reader = make_session_reader(envelope)
+            fetched = await reader.get_artifacts_batch([ref["artifact_id"] for ref in input_refs])
+            for art in fetched:
+                data = art.get("artifact_data", {})
+                findings.extend(data.get("findings", []))
+                if not raw_code:
+                    raw_code = data.get("code", "")
+            if findings:
+                logger.info(
+                    "[kio5] Pulled {} finding(s) from Session Manager via input_artifacts",
+                    len(findings),
+                )
 
     if findings:
         logger.info("[kio5] Validating {} finding(s) from upstream", len(findings))

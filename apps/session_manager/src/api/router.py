@@ -7,7 +7,9 @@ from fastapi import APIRouter, HTTPException
 from ..service.session_service import get_session_service
 from .schemas import (
     ApproveCheckpointRequest,
+    ArtifactContentResponse,
     ArtifactResponse,
+    BatchArtifactRequest,
     CheckpointResponse,
     CreateCheckpointRequest,
     CreateSessionRequest,
@@ -83,6 +85,39 @@ async def get_artifact(session_id: str, artifact_id: str):
     if not result or result.get("session_id") != session_id:
         raise HTTPException(status_code=404, detail=f"Artifact {artifact_id} not found")
     return result
+
+
+@router.get(
+    "/{session_id}/artifacts/{artifact_id}/content",
+    response_model=ArtifactContentResponse,
+    summary="Fetch artifact content (for KIO-to-KIO reads)",
+)
+async def get_artifact_content(session_id: str, artifact_id: str):
+    """Return only the artifact_data payload — resolves from S3 when offloaded.
+
+    KIO handlers use this to pull upstream artifacts by ID without needing
+    DB credentials. Resolves S3-offloaded payloads transparently.
+    """
+    svc = get_session_service()
+    result = await svc.get_artifact_content(session_id, artifact_id)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Artifact {artifact_id} not found")
+    return result
+
+
+@router.post(
+    "/{session_id}/artifacts/batch",
+    response_model=list[ArtifactContentResponse],
+    summary="Batch-fetch artifact content (for KIO-to-KIO reads)",
+)
+async def get_artifacts_batch(session_id: str, req: BatchArtifactRequest):
+    """Fetch multiple artifact payloads in one request.
+
+    KIO handlers pass ``input_artifacts[].artifact_id`` from the envelope payload
+    to retrieve all upstream outputs without N sequential HTTP calls.
+    """
+    svc = get_session_service()
+    return await svc.get_artifacts_batch(session_id, req.artifact_ids)
 
 
 @router.post("/{session_id}/hitl", response_model=CheckpointResponse, status_code=201)

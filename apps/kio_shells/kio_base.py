@@ -393,6 +393,84 @@ def _make_nats_handler(kio_id: str, handler: HandlerFn, js) -> Any:
     return _handle
 
 
+class SessionReader:
+    """Read-only HTTP client for KIO handlers to fetch upstream artifact content.
+
+    KIOs receive ``input_artifacts[].artifact_id`` in their envelope payload but
+    not the actual data (to keep envelopes small).  Use this client to pull the
+    full payload from Session Manager on demand — no DB credentials required.
+
+    Usage inside a handler::
+
+        reader = make_session_reader(envelope)
+
+        # Single artifact
+        kio3_data = await reader.get_artifact_content(artifact_id)
+
+        # All upstream artifacts in one request
+        all_inputs = await reader.get_artifacts_batch(
+            [a["artifact_id"] for a in envelope.payload.get("input_artifacts", [])]
+        )
+        kio3_out = next((a for a in all_inputs if a["producer_kio"] == "kio3"), {})
+    """
+
+    def __init__(self, base_url: str, session_id: str) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._session_id = session_id
+
+    async def get_artifact_content(self, artifact_id: str) -> dict[str, Any]:
+        """Fetch the fully-resolved artifact_data for a single artifact.
+
+        Returns an empty dict if the artifact is not found (so callers can use
+        ``.get()`` safely without try/except).
+        """
+        import httpx
+
+        url = f"{self._base_url}/sessions/{self._session_id}/artifacts/{artifact_id}/content"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(url)
+                if resp.status_code == 404:
+                    return {}
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:
+            logger.warning(
+                "[session_reader] get_artifact_content({}) failed: {}", artifact_id[:8], exc
+            )
+            return {}
+
+    async def get_artifacts_batch(self, artifact_ids: list[str]) -> list[dict[str, Any]]:
+        """Fetch multiple artifact payloads in one HTTP request.
+
+        Returns only the artifacts that exist and belong to the session;
+        missing IDs are silently omitted.
+        """
+        import httpx
+
+        if not artifact_ids:
+            return []
+        url = f"{self._base_url}/sessions/{self._session_id}/artifacts/batch"
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(url, json={"artifact_ids": artifact_ids})
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:
+            logger.warning(
+                "[session_reader] get_artifacts_batch({} ids) failed: {}", len(artifact_ids), exc
+            )
+            return []
+
+
+def make_session_reader(envelope: MessageEnvelope) -> SessionReader:
+    """Build a SessionReader from the incoming envelope (reads SM URL from config)."""
+    from shared.config import get_settings
+
+    cfg = get_settings()
+    return SessionReader(cfg.session_manager_url, envelope.session_id)
+
+
 def placeholder_handler(kio_id: str, task_label: str, delay: float = 1.0) -> HandlerFn:
     """Async handler that simulates work and returns a dummy artifact."""
 

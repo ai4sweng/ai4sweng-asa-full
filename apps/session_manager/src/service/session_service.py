@@ -187,6 +187,44 @@ class SessionService:
             )
         return result
 
+    async def get_artifact_content(
+        self, session_id: str, artifact_id: str
+    ) -> dict[str, Any] | None:
+        """Return a slim artifact descriptor with fully-resolved artifact_data.
+
+        Resolves S3-offloaded payloads transparently.  Returns None when the
+        artifact does not exist or belongs to a different session.
+        """
+        async with self._sp.read_scope() as repo:
+            a = await repo.get_artifact(artifact_id)
+        if not a or a.workflow_id != session_id:
+            return None
+        data = await self._resolve_artifact_data(a)
+        return {
+            "artifact_id": a.id,
+            "session_id": session_id,
+            "producer_kio": a.kio_id or "",
+            "artifact_type": a.artifact_type,
+            "artifact_data": data,
+            "parent_artifact_id": a.parent_artifact_id,
+        }
+
+    async def get_artifacts_batch(
+        self, session_id: str, artifact_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """Fetch multiple artifact payloads concurrently.
+
+        Unknown or cross-session IDs are silently omitted so the caller
+        receives a partial result rather than a hard 404.
+        """
+        import asyncio
+
+        async def _fetch(aid: str) -> dict[str, Any] | None:
+            return await self.get_artifact_content(session_id, aid)
+
+        results = await asyncio.gather(*[_fetch(aid) for aid in artifact_ids])
+        return [r for r in results if r is not None]
+
     async def get_artifact(self, artifact_id: str) -> dict[str, Any] | None:
         """Fetch a single artifact by its ID (DB PK == KIO artifact_id after 4.4)."""
         async with self._sp.read_scope() as repo:

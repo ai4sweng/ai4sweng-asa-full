@@ -36,15 +36,16 @@ User (natural language prompt)
        ├─► KIO3  Repository Analyzer   (when a repo must be read)
        ├─► KIO4  Test Generator
        ├─► KIO5  Bug Detector ─────────────────────────── A2A ──► KIO12 OWASP Scanner
-       ├─► KIO6  Patch Generator
-       ├─► KIO7  Test Re-runner
-       └─► KIO8  Evidence Reporter
-              │
-              ▼
-     HITL checkpoint (human review at configurable steps)
-              │
-              ▼
-       Session Manager (PostgreSQL) — all artifacts persisted
+       ├─► KIO6  Patch Generator       │
+       ├─► KIO7  Test Re-runner        │ KIOs read upstream artifacts
+       └─► KIO8  Evidence Reporter     │ via Session Manager HTTP API
+              │                        │ (no direct DB access)
+              ▼                        ▼
+     HITL checkpoint    Session Manager (:8002)
+      (human review)           │
+              │                │ SQLAlchemy / asyncpg
+              ▼                ▼
+       PostgreSQL — all sessions, artifacts, HITL checkpoints
 ```
 
 **What it does:**
@@ -54,7 +55,9 @@ User (natural language prompt)
 4. **Human-in-the-Loop (HITL)** checkpoints pause the workflow at configurable steps for review
 5. **Agent-to-Agent (A2A)**: KIO5 calls KIO12 directly for OWASP Top 10 enrichment without going through the orchestrator
 6. **LLM Fallback**: if qwen7b fails on any step, HITL asks the user to approve a retry with Claude
-7. All artifacts, checkpoints, and workflow state are persisted to PostgreSQL and streamed via SSE
+7. **KIO artifact reads**: KIOs pull upstream artifact data from Session Manager HTTP API — no DB credentials in KIO containers
+8. **Hallucination filtering**: LLM findings are validated against real file content before reaching human review; out-of-bounds line references are hard-removed
+9. All artifacts, checkpoints, and workflow state are persisted to PostgreSQL and streamed via SSE
 
 ---
 
@@ -335,6 +338,8 @@ Performs LLM-powered security and logic bug analysis. Works in two modes:
 - **Direct code mode**: raw code in `initial_context.code` → full vulnerability scan
 - **Findings validation mode**: validates upstream findings from KIO3
 
+When the orchestrator sends `input_artifacts` refs instead of inlining data, KIO5 fetches upstream artifact payloads from the **Session Manager HTTP API** (`POST /sessions/{sid}/artifacts/batch`) using `SessionReader`. This keeps PostgreSQL credentials entirely out of KIO containers — the SM is the sole DB gateway. Inline `last_artifact` still works for backward compatibility and skips the SM call.
+
 Also calls **KIO12 via A2A** for OWASP Top 10 enrichment on the same code, adding CWE identifiers and hardened file suggestions to the artifact.
 
 Always returns `REVIEW_REQUIRED` so a human approves the confirmed bug list before patching begins.
@@ -503,6 +508,97 @@ If `LLM_PROVIDER_FALLBACK` is not set, failed KIOs mark the session as `FAILED` 
 
 ---
 
+## KIO Artifact Reads — Session Manager API
+
+KIO containers have no database driver and no DB credentials. They read artifacts produced by upstream KIOs by calling the Session Manager REST API, which is the sole gateway to PostgreSQL.
+
+```
+KIO Handler (e.g. kio5)
+  │  envelope.payload["input_artifacts"] = [{artifact_id, artifact_type}, ...]
+  │
+  ▼
+make_session_reader(envelope)          ← kio_base.py
+  reads session_manager_url from config
+  binds session_id from envelope
+  │
+  ▼
+SessionReader.get_artifacts_batch([aid1, aid2])
+  POST http://session-manager:8002/sessions/{sid}/artifacts/batch
+  Body: {"artifact_ids": ["aid1", "aid2"]}
+  │
+  ▼ HTTP (httpx — no DB driver)
+  │
+Session Manager (:8002)
+  SessionService.get_artifacts_batch()
+    asyncio.gather(*[get_artifact_content(sid, aid) ...])   ← parallel fetch
+    cross-session guard: artifact.workflow_id != sid → omit
+    ├─► s3_key set?  → ArtifactStore.get(s3_key)           ← MinIO / S3
+    └─► inline       → artifact.content["data"]             ← JSONB column
+  │
+  ▼ SQLAlchemy / asyncpg
+  │
+PostgreSQL artifacts table
+  (id, workflow_id, kio_id, content JSONB, s3_key)
+```
+
+**Backward compatibility**: if the orchestrator still sends `last_artifact` inline (e.g. from an older step), the KIO uses it directly and skips the SM call — no redundant round-trip.
+
+**Resilience**: if SM is unreachable, `SessionReader` logs a warning and returns `[]` — the KIO continues with empty upstream data rather than crashing. The HITL gate at kio5 means a human still sees the result.
+
+See `apps/kio_shells/kio_base.py` (`SessionReader`, `make_session_reader`) and `apps/session_manager/src/api/router.py` (`GET /content`, `POST /batch`).
+
+---
+
+## Hallucination Handling
+
+LLM output is validated at four independent layers before patches are ever applied.
+
+```
+LLM raw text response
+        │
+        ▼
+Layer 1 — KIO handler (every KIO)
+  _strip_fences()           strips ```json ... ``` markdown wrappers
+  json.loads()
+  shape validation          is it a dict? is "bugs" a list?
+  except → silent fallback  empty bugs list / default pipeline — no crash
+        │
+        ▼
+Layer 2 — Hallucination Validator  (shared/llm/repo_file_analyzer.py)
+  ┌─ Line bound check ──────────────────────────────── HARD REMOVE ─┐
+  │  line_hint > file.line_count AND file not truncated             │
+  │  → finding deleted, hallucination_filtered += 1                 │
+  │  → logged at WARNING; appears in Langfuse trace                 │
+  └─────────────────────────────────────────────────────────────────┘
+  ┌─ Evidence grounding check ──────────────────────── WARNING ─────┐
+  │  ≥3 significant tokens from evidence absent in file excerpt     │
+  │  → warning added to hallucination_warnings                      │
+  │  → finding KEPT (LLM may paraphrase; human HITL is final gate)  │
+  └─────────────────────────────────────────────────────────────────┘
+  Runs on both primary parse AND repair-retry output.
+        │
+        ▼
+Layer 3 — Orchestrator retry  (apps/orchestrator/src/engine/graph_nodes.py)
+  KIO returns error or throws:
+  ├─► RetryManager.should_retry()  → sleep 2^n s (exponential, max 60s)
+  │   → same KIO reruns
+  └─► retries exhausted + llm_provider_fallback set
+      → HITL: "KIO5 failed with ollama. Approve retry with anthropic?"
+        advance_node injects llm_provider_override → same step reruns
+        │
+        ▼
+Layer 4 — HITL gate  (kio5 always REVIEW_REQUIRED)
+  Human reviews the confirmed bug list:
+  • hallucination_warnings surfaced in Langfuse and artifact metadata
+  • evidence grounding flags visible to reviewer
+  • approve → pipeline continues (kio6 generates patches)
+  • reject  → session marked FAILED
+```
+
+**Coverage gap that remains**: line-number and evidence checks can only work for files that were passed to the LLM in the prompt. Files referenced by the LLM that were never in the context window are caught only at the HITL layer.
+
+---
+
 ## Agent-to-Agent (A2A) Communication
 
 KIOs can call peer KIOs directly without routing through the orchestrator graph:
@@ -546,7 +642,7 @@ kio1-platform/
 │   ├── session_manager/         # Session + artifact + HITL store
 │   │
 │   ├── kio_shells/
-│   │   ├── kio_base.py          # make_kio_app() shared factory
+│   │   ├── kio_base.py          # make_kio_app() + SessionReader + make_session_reader()
 │   │   ├── Dockerfile           # Single image, all KIOs (ARG KIO_ID)
 │   │   ├── kio1/  … kio13/      # One main.py per KIO
 │   │   └── pyproject.toml
@@ -556,12 +652,13 @@ kio1-platform/
 ├── shared/                      # Shared library (imported by all services)
 │   ├── config.py                # Pydantic Settings — all env vars
 │   ├── llm/
-│   │   ├── factory.py           # create_llm_provider(override="")
+│   │   ├── factory.py              # create_llm_provider(override="")
+│   │   ├── repo_file_analyzer.py   # LLM+retry+repair+hallucination validator
 │   │   ├── ollama_provider.py
 │   │   ├── claude_provider.py
 │   │   ├── openai_provider.py
 │   │   ├── mock.py
-│   │   └── llm_json_coerce.py   # Hallucination-resilient JSON parsing
+│   │   └── llm_json_coerce.py      # Hallucination-resilient JSON coercion
 │   ├── a2a/
 │   │   └── client.py            # A2AClient — KIO-to-KIO direct invocation
 │   ├── messaging/

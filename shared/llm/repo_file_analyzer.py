@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -73,6 +74,8 @@ class FileAnalysisResult:
     retry_latency_ms: float = 0.0
     retry_tokens_in: int = 0
     retry_tokens_out: int = 0
+    hallucination_filtered: int = 0
+    hallucination_warnings: list[str] = field(default_factory=list)
 
     def to_trace_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +95,8 @@ class FileAnalysisResult:
             "repaired_content_preview": (
                 self.repaired_raw_content[:500] if self.repaired_raw_content else None
             ),
+            "hallucination_filtered": self.hallucination_filtered,
+            "hallucination_warnings": self.hallucination_warnings,
         }
 
 
@@ -180,6 +185,81 @@ def _regex_findings_to_repo(
     return converted
 
 
+_PY_KEYWORDS = frozenset(
+    "def class return import from if else elif for while try except with as and or "
+    "not in is None True False self pass raise yield async await lambda break "
+    "continue finally global nonlocal del assert".split()
+)
+
+# Minimum number of significant tokens in evidence that must match the file excerpt.
+# One match is enough — we only warn when there is zero overlap.
+_MIN_EVIDENCE_TOKENS = 3
+
+
+def _parse_line_hint(line_hint: str) -> int | None:
+    """Return the first integer in line_hint, or None if unparseable."""
+    if not line_hint:
+        return None
+    m = re.match(r"(\d+)", line_hint.strip())
+    return int(m.group(1)) if m else None
+
+
+def _significant_tokens(text: str) -> list[str]:
+    """Return lowercased alphanumeric tokens that are long enough to be meaningful."""
+    tokens = re.findall(r"[A-Za-z_]\w*", text)
+    return [t.lower() for t in tokens if len(t) > 3 and t.lower() not in _PY_KEYWORDS]
+
+
+def _validate_against_source(
+    findings: list[RepoFinding],
+    file_ctx: FileContext,
+) -> tuple[list[RepoFinding], int, list[str]]:
+    """Check each finding for line-bound and evidence-grounding violations.
+
+    Two checks:
+      Line bound  — hard remove when line_hint points past the end of the file
+                    (skipped when the file is truncated — we may not have seen all lines).
+      Evidence    — warning when evidence tokens are entirely absent from the excerpt
+                    (soft: finding is kept because the LLM may paraphrase or the file
+                    may be truncated; the warning surfaces in traces and HITL).
+
+    Returns (valid_findings, filtered_count, warnings).
+    """
+    valid: list[RepoFinding] = []
+    filtered = 0
+    warnings: list[str] = []
+    excerpt_lower = file_ctx.excerpt.lower()
+
+    for f in findings:
+        # ── Line bound check ──────────────────────────────────────────────
+        line_no = _parse_line_hint(f.line_hint)
+        if line_no is not None and not file_ctx.truncated and line_no > file_ctx.line_count:
+            logger.warning(
+                "Hallucination filter: %s line %d > file length %d — removed",
+                f.file_path,
+                line_no,
+                file_ctx.line_count,
+            )
+            filtered += 1
+            continue
+
+        # ── Evidence grounding check ──────────────────────────────────────
+        evidence_tokens = _significant_tokens(f.evidence)
+        if len(evidence_tokens) >= _MIN_EVIDENCE_TOKENS:
+            if not any(tok in excerpt_lower for tok in evidence_tokens):
+                msg = (
+                    f"{f.bug_id} ({f.file_path}:{f.line_hint}): evidence tokens "
+                    f"{evidence_tokens[:5]} not found in excerpt — possible hallucination"
+                )
+                logger.warning("Hallucination warning: %s", msg)
+                warnings.append(msg)
+                # Keep the finding — the human HITL is the final gate.
+
+        valid.append(f)
+
+    return valid, filtered, warnings
+
+
 def _parse_response(
     content: str,
     file_ctx: FileContext,
@@ -207,6 +287,9 @@ async def analyze_repository_file(
     latency_ms = response.latency_ms
     findings, error = _parse_response(response.content, file_ctx)
 
+    # Content-level hallucination check on primary parse output.
+    findings, h_filtered, h_warnings = _validate_against_source(findings, file_ctx)
+
     result = FileAnalysisResult(
         file_path=file_ctx.file_path,
         prompt=prompt,
@@ -216,6 +299,8 @@ async def analyze_repository_file(
         parse_error=error,
         latency_ms=latency_ms,
         detection_source="llm",
+        hallucination_filtered=h_filtered,
+        hallucination_warnings=h_warnings,
     )
 
     if error is None or findings:
@@ -235,6 +320,9 @@ async def analyze_repository_file(
         )
         retry_findings, retry_error = _parse_response(retry_response.content, file_ctx)
 
+        # Content-level hallucination check on retry parse output.
+        retry_findings, r_filtered, r_warnings = _validate_against_source(retry_findings, file_ctx)
+
         result.retry_used = True
         result.retry_prompt = retry_prompt
         result.retry_latency_ms = retry_response.latency_ms
@@ -242,6 +330,8 @@ async def analyze_repository_file(
         result.retry_tokens_out = retry_response.tokens_out
         result.repaired_raw_content = retry_response.content
         result.latency_ms += retry_response.latency_ms
+        result.hallucination_filtered += r_filtered
+        result.hallucination_warnings.extend(r_warnings)
 
         if retry_findings or retry_error is None:
             result.findings = retry_findings

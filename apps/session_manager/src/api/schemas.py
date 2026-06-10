@@ -72,3 +72,16 @@ class ApproveCheckpointRequest(BaseModel):
     action: str = "APPROVED"
     actor: str = "human_operator"
     feedback: str = ""
+
+
+class BatchArtifactRequest(BaseModel):
+    artifact_ids: list[str]
+
+
+class ArtifactContentResponse(BaseModel):
+    artifact_id: str
+    session_id: str
+    producer_kio: str
+    artifact_type: str
+    artifact_data: dict[str, Any]
+    parent_artifact_id: str | None = None

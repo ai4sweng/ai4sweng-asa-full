@@ -1,6 +1,6 @@
 # Architecture — KIO1 AI Software Engineering Platform
 
-**Version:** Phase 10 (Orchestrator SM + Timeout Monitor + Dynamic Agent Discovery)  
+**Version:** Phase 12 (KIO SM API reads + Content-level hallucination validator)  
 **Stack:** Python 3.12 · FastAPI · LangGraph · NATS JetStream · PostgreSQL 16 · React 18
 
 ---
@@ -394,7 +394,7 @@ async def _get_provider():
 
 ## 7. Session Manager — Persistence Layer
 
-Stateless REST service backed by PostgreSQL. Owns all durable state so the Orchestrator can be restarted without data loss.
+Stateless REST service backed by PostgreSQL. Owns all durable state so the Orchestrator can be restarted without data loss. Also serves as the **sole database gateway for KIO containers** — KIOs carry no DB credentials and pull upstream artifact data via the SM HTTP API.
 
 ### API surface
 
@@ -405,8 +405,62 @@ Stateless REST service backed by PostgreSQL. Owns all durable state so the Orche
 | `PUT /sessions/{id}/status` | Transition state machine |
 | `POST /sessions/{id}/artifacts` | Register KIO artifact |
 | `GET /sessions/{id}/artifacts` | List all artifacts |
+| `GET /sessions/{id}/artifacts/{aid}` | Fetch single artifact |
+| `GET /sessions/{id}/artifacts/{aid}/content` | **KIO read** — resolved artifact payload (S3-transparent) |
+| `POST /sessions/{id}/artifacts/batch` | **KIO read** — parallel multi-artifact fetch |
 | `POST /sessions/{id}/hitl` | Create HITL checkpoint (HumanApprovalRecord) |
 | `PUT /sessions/{id}/hitl/{cp_id}` | Resolve checkpoint (APPROVED/REJECTED) |
+
+### KIO artifact read path
+
+KIO containers have no database driver. They read upstream artifact data by calling the SM HTTP API. `SessionReader` in `kio_base.py` is the client; `make_session_reader(envelope)` creates one bound to the current session.
+
+```
+KIO Container  (no DB credentials, no DB driver)
+  │
+  │  input_refs = envelope.payload["input_artifacts"]
+  │  # [{"artifact_id": "abc-123", "artifact_type": "json"}, ...]
+  │
+  │  reader = make_session_reader(envelope)
+  │    # reads cfg.session_manager_url, binds envelope.session_id
+  │
+  │  fetched = await reader.get_artifacts_batch(
+  │      [ref["artifact_id"] for ref in input_refs]
+  │  )
+  │
+  │  POST http://session-manager:8002
+  │       /sessions/{session_id}/artifacts/batch
+  │  Body: {"artifact_ids": ["abc-123", ...]}
+  │  (httpx AsyncClient, timeout=30s)
+  │
+  ▼
+Session Manager  (:8002)
+  │
+  │  SessionService.get_artifacts_batch(session_id, artifact_ids)
+  │    asyncio.gather(*[get_artifact_content(sid, aid) ...])  ← parallel
+  │
+  │  per artifact: get_artifact_content(session_id, artifact_id)
+  │    ├── cross-session guard: artifact.workflow_id != session_id → None
+  │    │     (prevents one session reading another's artifacts)
+  │    ├── if artifact.s3_key: ArtifactStore.get(s3_key)  ← MinIO / S3
+  │    └── else: artifact.content["data"]                  ← JSONB inline
+  │
+  │  SessionProvider.read_scope()
+  │    WorkflowRepository.get_artifact(artifact_id)
+  │
+  ▼ SQLAlchemy (asyncpg)
+  │
+PostgreSQL — artifacts table
+  ┌─────────────┬─────────────┬──────────┬────────────────────┬──────────┐
+  │ id (UUID)   │ workflow_id │ kio_id   │ content (JSONB)    │ s3_key   │
+  │ = artifact_ │ FK session  │ producer │ {data, stage,      │ nullable │
+  │   id        │             │          │  state}            │          │
+  └─────────────┴─────────────┴──────────┴────────────────────┴──────────┘
+```
+
+**Backward compatibility**: if the orchestrator inlines data in `last_artifact`, the KIO uses it directly and skips the SM call entirely.
+
+**Resilience**: `SessionReader` catches all exceptions and returns `[]` on SM failure. The KIO continues with empty upstream data; kio5's HITL gate surfaces the degraded output to the human reviewer.
 
 ### Unit of work
 
@@ -575,14 +629,139 @@ These tables are not managed by Alembic — they are created and maintained by `
 
 ## 11. LLM Integration & Hallucination Recovery
 
-### Parsing pipeline
+Four independent defence layers. Each handles a different failure mode — structural, content-level, task-level, and human review.
 
-Every LLM response goes through a multi-strategy repair pipeline before use:
+### Layer 1 — KIO handler: JSON parse + silent fallback
+
+Every KIO that calls the LLM follows the same pattern:
+
+```
+LLM returns text
+  → _strip_fences()         strips ```json ... ``` markdown wrappers
+  → json.loads()            raises JSONDecodeError on prose output
+  → shape validation        isinstance(result, dict)? isinstance(bugs, list)?
+  → except Exception:
+      kio2  → use hardcoded full pipeline  (no crash)
+      kio5  → bugs = []                   (still returns REVIEW_REQUIRED)
+      kio8  → empty report                (still returns DONE)
+```
+
+### Layer 2 — Content-level hallucination validator
+
+`shared/llm/repo_file_analyzer.py` — `_validate_against_source(findings, file_ctx)`
+
+Runs on **both** the primary parse output and any repair-retry output.
+
+```
+per finding:
+
+  ┌─ Check A: Line bound ──────────────────────────── HARD REMOVE ──────┐
+  │                                                                      │
+  │  line_no = _parse_line_hint(finding.line_hint)                      │
+  │  # extracts first integer from "42", "42-45", "approx line 3"      │
+  │                                                                      │
+  │  if line_no > file_ctx.line_count                                   │
+  │     AND NOT file_ctx.truncated:                                     │
+  │                                                                      │
+  │    → finding DELETED from results list                              │
+  │    → hallucination_filtered += 1                                    │
+  │    → logger.WARNING  (→ Langfuse trace via to_trace_dict())         │
+  │                                                                      │
+  │  Truncation exemption: when the file was truncated before sending   │
+  │  to the LLM, it may have correctly inferred lines beyond the        │
+  │  excerpt — benefit of the doubt, line check skipped.               │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  ┌─ Check B: Evidence grounding ──────────────────── WARNING (kept) ───┐
+  │                                                                      │
+  │  tokens = _significant_tokens(finding.evidence)                     │
+  │  # alphanumeric, len > 3, not in Python keywords                    │
+  │                                                                      │
+  │  if len(tokens) >= 3                                                │
+  │     AND none of tokens appear in file_ctx.excerpt.lower():         │
+  │                                                                      │
+  │    → warning string added to hallucination_warnings list            │
+  │    → finding KEPT                                                   │
+  │                                                                      │
+  │  Kept because: LLM often paraphrases rather than quoting verbatim. │
+  │  One missing token overlap is not proof of hallucination.           │
+  │  The HITL gate at kio5 is the final content-validity check.        │
+  └──────────────────────────────────────────────────────────────────────┘
+```
+
+If primary parse produced zero findings → **repair retry**:
+
+```
+provider.complete(repair_prompt, system="You repair invalid LLM outputs into strict JSON")
+  repair_prompt includes the original bad output as context
+  → _parse_response() on retry output
+  → _validate_against_source() runs again
+  hallucination_filtered and hallucination_warnings accumulated into result
+
+If still empty → regex fallback (RepoScanner pattern matching on actual file bytes)
+```
+
+Result metadata fields (all flow into Langfuse via `ObservedLLMProvider.to_trace_dict()`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `hallucination_filtered` | int | Findings hard-removed by line bound check |
+| `hallucination_warnings` | list[str] | Evidence-grounding warnings (finding kept) |
+| `retry_used` | bool | Repair retry was triggered |
+| `parse_repaired` | bool | Retry produced valid JSON |
+| `regex_fallback_used` | bool | Regex scanner was used as last resort |
+
+### Layer 3 — Orchestrator task retry (RetryManager)
+
+`apps/orchestrator/src/engine/graph_nodes.py` + `retry_manager.py`
+
+```
+RetryManager: per-session attempt counter + backoff policy
+Default:      max_retries=1, backoff=exponential
+
+while True:
+  try:
+    result = await kio.execute(...)
+    rm.reset(session_id)     ← success: reset counter for next step
+    break
+
+  except Exception:
+    if rm.should_retry():
+      await rm.wait_and_increment()
+      # exponential: sleep min(2^(n-1), 60)s
+      # linear:      sleep min(n * 1.0, 60)s
+      emit TASK_RETRYING SSE event
+      continue                      ← retry same KIO, same step
+
+    # retries exhausted
+    if cfg.llm_provider_fallback:
+      return REVIEW_REQUIRED        ← HITL: "approve switch to anthropic?"
+      # advance_node injects llm_provider_override
+      # same KIO reruns at same step with new provider
+      # already_retried=True prevents infinite loop
+
+    raise                           ← no fallback: session FAILED
+```
+
+### Layer 4 — HITL gate (kio5 always REVIEW_REQUIRED)
+
+kio5 always returns `REVIEW_REQUIRED`. `should_hitl()` in `graph_nodes.py` routes to `hitl_node` whenever `status == "REVIEW_REQUIRED"`. Human sees:
+
+- Confirmed bug list with CWE IDs + OWASP enrichment from kio12
+- `hallucination_warnings` surfaced via Langfuse and artifact metadata
+- Evidence quoted from the actual source file for spot-checking
+
+**approve** → `advance_node` increments step → kio6 generates patches  
+**reject** → session status = FAILED
+
+**Remaining gap**: findings in files never sent to the LLM (outside the excerpt window) cannot be line-checked or evidence-checked by Layer 2. They reach the human review gate only.
+
+### JSON parsing pipeline (extract_json_object)
+
+Used by the LM Engine and lm_client for plan responses:
 
 ```
 raw LLM output (str)
-        │
-        ▼  extract_json_object()
         │
         ├── 1. Try raw string as-is                  → json.loads()
         ├── 2. Strip markdown fences (```json…```)   → json.loads()
@@ -598,38 +777,30 @@ Returns: dict | None  (None if all strategies fail)
 
 ### LM Engine planning — retry strategy
 
-When the LM Engine plans the KIO sequence:
-
 ```
 Attempt 1: prompt → extract_json_object → validate KIOs → deduplicate → cap at 8
   │
   ▼ if validation fails
-Attempt 2: same prompt (model may produce different output on retry)
+Attempt 2: same prompt (model may produce different output)
   │
   ▼ if still fails
 Fallback: ["kio3", "kio5"]  (hardcoded safe default)
 ```
 
-Validation checks:
-- `kio_sequence` is a list
-- Each element is in `_VALID_KIOS` (`kio2`–`kio13`)
-- No duplicates (order preserved, deduped)
-- At most 8 KIOs
+Validation: sequence is a list; each element in `_VALID_KIOS` (kio2–kio13); no duplicates; ≤ 8 KIOs.
 
-### KIO-level degradation
-
-When a KIO's handler catches an exception (including LLM unavailable, malformed response, timeout):
+### KIO-level degradation (last resort)
 
 ```python
 except Exception as exc:
     return {
-        "status": "REVIEW_REQUIRED",     # triggers HITL
+        "status": "REVIEW_REQUIRED",
         "artifact_data": {"error": str(exc), …},
         "hitl_question": "KIO N encountered an error. Continue?",
     }
 ```
 
-This ensures the workflow never crashes silently — a human always gets to decide what to do next.
+Workflow never crashes silently — a human always decides what happens next.
 
 ---
 
