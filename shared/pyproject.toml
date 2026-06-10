@@ -7,7 +7,7 @@ dependencies = [
     # PostgreSQL async
     "sqlalchemy>=2.0",
     "asyncpg>=0.30",
-    "alembic>=1.15",
+    "alembic>=1.18.4",
     # NATS
     "nats-py>=2.7",
     # LLM providers
