@@ -6,7 +6,7 @@ dependencies = [
     "shared",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
-    "loguru>=0.7",
+    "loguru>=0.7.3",
 ]
 
 [build-system]
