@@ -157,6 +157,16 @@ class Settings(BaseSettings):
     kio_subprocess_pip_timeout: int = 120  # seconds for pip install / dependency setup
     kio_subprocess_test_timeout: int = 30  # seconds for a single pytest collect/run
 
+    # ── S3 / MinIO artifact storage (Phase 5) ─────────────────────────────────
+    # Set S3_ENABLED=true to offload artifact payloads to object storage.
+    # Defaults to false for local dev — DB content column used as before.
+    s3_enabled: bool = False
+    s3_endpoint_url: str = "http://localhost:9000"   # MinIO local; empty = AWS S3
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "enisalimerge-artifacts"
+    s3_region: str = "us-east-1"
+
     # ── Logging ───────────────────────────────────────────────────────────────
     log_level: str = "INFO"
 

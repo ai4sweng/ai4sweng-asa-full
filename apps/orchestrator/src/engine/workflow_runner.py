@@ -393,6 +393,20 @@ class WorkflowRunner:
             pass
         self._emit("WORKFLOW_FAILED", session_id,
                    f"Workflow FAILED: {exc}", {"error": str(exc)})
+
+        # Phase 6: trigger compensation for any artifacts registered before the failure
+        artifact_ids: list[str] = state.get("artifacts", [])
+        if artifact_ids:
+            try:
+                from .compensation_engine import get_compensation_engine
+                engine = get_compensation_engine(
+                    session_client=self._sm,
+                    emit_fn=self._emit,
+                )
+                await engine.compensate(session_id, artifact_ids)
+            except Exception as comp_exc:
+                logger.error("[compensation] unexpected error for {}: {}", session_id[:8], comp_exc)
+
         # Release in-process state; the durable record lives in PostgreSQL.
         self._cleanup_session(session_id)
         try:

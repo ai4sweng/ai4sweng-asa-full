@@ -162,6 +162,7 @@ def make_kio_app(
     title: str,
     handler: HandlerFn,
     supported_tasks: list | None = None,
+    compensation_handler: Callable[[str], Awaitable[None]] | None = None,
 ) -> FastAPI:
     """Build a FastAPI app for a KIO shell.
 
@@ -263,6 +264,23 @@ def make_kio_app(
             message_type="JOB_RESULT",
             payload=result_payload,
         )
+
+    @app.delete("/artifacts/{artifact_id}", status_code=204)
+    async def compensate_artifact(artifact_id: str):
+        """Compensation endpoint — Phase 6.
+
+        Called by the orchestrator's CompensationEngine when a workflow fails.
+        Idempotent: returns 204 on success or if the artifact is already gone.
+        KIOs with side-effects should pass a ``compensation_handler`` to
+        make_kio_app() to undo them; by default this is a logged no-op.
+        """
+        logger.info("[{}] COMPENSATE artifact {}", kio_id, artifact_id[:8])
+        if compensation_handler is not None:
+            try:
+                await compensation_handler(artifact_id)
+            except Exception as exc:
+                logger.warning("[{}] compensation_handler failed for {}: {}", kio_id, artifact_id[:8], exc)
+        return None  # 204 No Content
 
     return app
 

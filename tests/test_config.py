@@ -31,11 +31,12 @@ class TestSettings:
         with pytest.raises(Exception, match="JWT_SECRET_KEY"):
             Settings(jwt_secret_key="change-me-in-production")
 
-    def test_jwt_secret_accepted_in_dev(self, monkeypatch):
+    def test_jwt_secret_accepted_when_valid(self, monkeypatch):
         monkeypatch.delenv("ENV", raising=False)
         from shared.config import Settings
-        s = Settings(jwt_secret_key="change-me-in-production")
-        assert s.jwt_secret_key == "change-me-in-production"
+        valid_secret = "a" * 32  # meets the 32-char minimum
+        s = Settings(jwt_secret_key=valid_secret)
+        assert s.jwt_secret_key == valid_secret
 
     def test_custom_pool_config(self):
         from shared.config import Settings

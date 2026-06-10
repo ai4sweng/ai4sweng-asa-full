@@ -22,6 +22,9 @@ dependencies = [
     "pydantic-settings>=2.0",
     # Logging
     "loguru>=0.7",
+    # S3 / MinIO artifact storage (Phase 5)
+    "aiobotocore>=2.13",
+    "boto3>=1.35",
 ]
 
 [build-system]

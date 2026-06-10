@@ -125,6 +125,9 @@ class ArtifactRecord(Base):
     parent_artifact_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("artifacts.id"))
     content: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Phase 5: S3 object key when payload is offloaded to object storage.
+    # None means payload is stored inline in `content["data"]`.
+    s3_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     workflow: Mapped["WorkflowRecord"] = relationship(back_populates="artifacts")

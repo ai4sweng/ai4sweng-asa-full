@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from shared.constants import TaskState, WorkflowState
 from shared.persistence.session_provider import SessionProvider
+from shared.storage import get_artifact_store
 
 
 class SessionService:
@@ -70,6 +71,9 @@ class SessionService:
             "CANCELLED": WorkflowState.CANCELLED,
             "PENDING_REVIEW": WorkflowState.WAITING_FOR_HUMAN_APPROVAL,
             "BLOCKED": WorkflowState.BLOCKED,
+            # Phase 6: compensation states
+            "COMPENSATING": WorkflowState.COMPENSATING,
+            "COMPENSATED": WorkflowState.COMPENSATED,
         }
         wf_state = state_map.get(status, WorkflowState.RUNNING)
         async with self._sp.session_scope() as repo:
@@ -113,13 +117,26 @@ class SessionService:
     ) -> dict[str, Any]:
         """Persist a KIO-produced artifact and return its descriptor dict.
 
-        parent_artifact_id is stored in the content JSON rather than the ORM FK
-        column because the FK references the DB auto-generated PK, which is not
-        aligned with the KIO-generated artifact_id yet.  Lineage is queryable via
-        content['parent_artifact_id'] until IDs are unified.
+        When S3 is enabled, the artifact_data payload is uploaded to object
+        storage and the DB stores only lightweight metadata + an s3_key pointer.
+        Falls back to inline DB storage on any S3 error.
         """
+        store = get_artifact_store()
+        s3_key: str | None = None
+        stored_data: dict[str, Any] = artifact_data
+
+        if store.enabled:
+            try:
+                s3_key = await store.put(artifact_id, session_id, artifact_data)
+                stored_data = {}   # don't duplicate payload in DB
+                logger.debug("[session_svc] artifact {} offloaded to s3://{}", artifact_id, s3_key)
+            except Exception as exc:
+                logger.warning(
+                    "[session_svc] S3 upload failed for {} — falling back to DB: {}", artifact_id, exc
+                )
+
         content = {
-            "data": artifact_data,
+            "data": stored_data,
             "stage": workflow_stage,
             "state": state,
         }
@@ -132,6 +149,7 @@ class SessionService:
                 artifact_id=artifact_id,
                 kio_id=producer_kio,
                 parent_artifact_id=parent_artifact_id,
+                s3_key=s3_key,
             )
         return {
             "artifact_id": artifact.id,
@@ -141,26 +159,28 @@ class SessionService:
             "artifact_data": artifact_data,
             "state": state,
             "parent_artifact_id": parent_artifact_id,
+            "s3_key": s3_key,
         }
 
     async def get_artifacts(self, session_id: str) -> list[dict[str, Any]]:
         """Return all artifact descriptors registered for a session."""
         async with self._sp.read_scope() as repo:
             artifacts = await repo.list_artifacts_for_workflow(session_id)
-        return [
-            {
+        result = []
+        for a in artifacts:
+            data = await self._resolve_artifact_data(a)
+            result.append({
                 "artifact_id": a.id,
                 "session_id": session_id,
                 "producer_kio": a.kio_id or "",
                 "artifact_type": a.artifact_type,
-                "artifact_data": (a.content or {}).get("data", {}),
+                "artifact_data": data,
                 "state": (a.content or {}).get("state", "CREATED"),
-                # 4.4: parent_artifact_id now stored in ORM FK column
                 "parent_artifact_id": a.parent_artifact_id,
+                "s3_key": a.s3_key,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
-            }
-            for a in artifacts
-        ]
+            })
+        return result
 
     async def get_artifact(self, artifact_id: str) -> dict[str, Any] | None:
         """Fetch a single artifact by its ID (DB PK == KIO artifact_id after 4.4)."""
@@ -168,16 +188,30 @@ class SessionService:
             a = await repo.get_artifact(artifact_id)
         if not a:
             return None
+        data = await self._resolve_artifact_data(a)
         return {
             "artifact_id": a.id,
             "session_id": a.workflow_id,
             "producer_kio": a.kio_id or "",
             "artifact_type": a.artifact_type,
-            "artifact_data": (a.content or {}).get("data", {}),
+            "artifact_data": data,
             "state": (a.content or {}).get("state", "CREATED"),
             "parent_artifact_id": a.parent_artifact_id,
+            "s3_key": a.s3_key,
             "created_at": a.created_at.isoformat() if a.created_at else None,
         }
+
+    async def _resolve_artifact_data(self, a: Any) -> dict[str, Any]:
+        """Return artifact_data: from S3 if offloaded, else from DB content column."""
+        if a.s3_key:
+            try:
+                return await get_artifact_store().get(a.s3_key)
+            except Exception as exc:
+                logger.warning(
+                    "[session_svc] S3 fetch failed for {} ({}): {} — using DB fallback",
+                    a.id, a.s3_key, exc,
+                )
+        return (a.content or {}).get("data", {})
 
     # ------------------------------------------------------------------
     # HITL checkpoints

@@ -205,6 +205,7 @@ class Repository:
         task_id: str | None = None,
         kio_id: str | None = None,
         parent_artifact_id: str | None = None,
+        s3_key: str | None = None,
     ) -> ArtifactRecord:
         kwargs: dict[str, Any] = dict(
             workflow_id=workflow_id,
@@ -214,6 +215,7 @@ class Repository:
             parent_artifact_id=parent_artifact_id,
             content=content,
             checksum=self._checksum(content),
+            s3_key=s3_key,
         )
         # 4.4: use caller-supplied UUID as PK so artifact_id == DB PK and FK lineage works
         if artifact_id:

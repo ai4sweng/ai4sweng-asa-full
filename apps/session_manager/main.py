@@ -16,12 +16,15 @@ from loguru import logger
 
 from shared.config import get_settings
 from shared.persistence.database import dispose_engine
+from shared.storage import get_artifact_store
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = get_settings()
     logger.info("Session Manager starting on port {}", cfg.session_manager_port)
+    # Phase 5: ensure S3 bucket exists (no-op when S3_ENABLED=false)
+    await get_artifact_store().ensure_bucket()
     yield
     await dispose_engine()
     logger.info("Session Manager shut down")

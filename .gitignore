@@ -39,3 +39,4 @@ logs/
 # Docker volumes (if mounted locally)
 postgres-data/
 nats-data/
+minio-data/
