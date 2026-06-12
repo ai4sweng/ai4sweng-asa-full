@@ -249,7 +249,7 @@ def make_kio_app(
         task_timeout = envelope.payload.get("timeout_seconds")
         timeout_s = float(task_timeout) if task_timeout else cfg_timeout
         try:
-            result_payload = await asyncio.wait_for(handler(envelope), timeout=timeout_s)
+            result_payload = await _invoke_handler(handler, envelope, timeout_s)
         except asyncio.TimeoutError:
             logger.error("[{}] handler timed out after {}s", kio_id, timeout_s)
             result_payload = _make_error(
@@ -303,6 +303,23 @@ def make_kio_app(
     return app
 
 
+async def _invoke_handler(handler: HandlerFn, envelope: MessageEnvelope, timeout_s: float) -> dict:
+    """Run a KIO handler with a timeout and stamp LLM token usage onto its result.
+
+    `usage.begin()` opens a fresh token-accounting scope; ObservedLLMProvider
+    records every LLM call into it; `usage.snapshot()` reads the per-job total.
+    """
+    from shared.llm import usage
+
+    usage.begin()
+    result = await asyncio.wait_for(handler(envelope), timeout=timeout_s)
+    tokens_in, tokens_out = usage.snapshot()
+    if isinstance(result, dict):
+        result.setdefault("tokens_in", tokens_in)
+        result.setdefault("tokens_out", tokens_out)
+    return result
+
+
 def _make_nats_handler(kio_id: str, handler: HandlerFn, js) -> Any:
     """Return an async NATS message handler that calls the KIO handler and replies."""
 
@@ -344,7 +361,7 @@ def _make_nats_handler(kio_id: str, handler: HandlerFn, js) -> Any:
                 except Exception:
                     pass
 
-            result_payload = await asyncio.wait_for(handler(envelope), timeout=timeout_s)
+            result_payload = await _invoke_handler(handler, envelope, timeout_s)
         except asyncio.TimeoutError:
             logger.error("[{}] NATS handler timed out after {}s", kio_id, timeout_s)
             result_payload = _make_error(

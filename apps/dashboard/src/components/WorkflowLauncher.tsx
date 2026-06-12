@@ -50,7 +50,7 @@ export default function WorkflowLauncher() {
         <textarea
           className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-brand resize-none"
           rows={3}
-          placeholder="e.g. Find and fix bugs in the FastAPI service at ./examples/buggy_fastapi_repo"
+          placeholder="e.g. Find and fix bugs in the bundled FastAPI example repo"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           required
@@ -58,13 +58,19 @@ export default function WorkflowLauncher() {
       </div>
 
       <div>
-        <label className="text-xs text-gray-400 block mb-1">Working directory (optional)</label>
+        <label className="text-xs text-gray-400 block mb-1">
+          Working directory (optional) — container path
+        </label>
         <input
           className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-brand"
-          placeholder="./examples/buggy_fastapi_repo"
+          placeholder="/repos/target/buggy_fastapi_repo"
           value={workingDir}
           onChange={(e) => setWorkingDir(e.target.value)}
         />
+        <p className="text-[10px] text-gray-500 mt-1">
+          Leave blank to use the bundled example. Paths are inside the KIO containers
+          (host <code>./examples</code> is mounted at <code>/repos/target</code>).
+        </p>
       </div>
 
       <div>

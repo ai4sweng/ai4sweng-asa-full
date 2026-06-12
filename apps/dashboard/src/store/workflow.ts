@@ -19,6 +19,10 @@ interface WorkflowEvent {
   checkpoint_id?: string
   kio?: string
   hitl_question?: string
+  // KIO_DONE carries per-step duration (orchestrator-measured) + LLM token usage
+  execution_time_ms?: number
+  tokens_in?: number
+  tokens_out?: number
 }
 
 interface PendingHitl {
@@ -29,6 +33,7 @@ interface PendingHitl {
 
 interface WorkflowStore {
   sessionId: string | null
+  description: string | null
   status: WorkflowStatus | null
   events: WorkflowEvent[]
   artifacts: ArtifactInfo[]
@@ -48,6 +53,7 @@ interface WorkflowStore {
 
 export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   sessionId: null,
+  description: null,
   status: null,
   events: [],
   artifacts: [],
@@ -57,7 +63,15 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   eventSource: null,
 
   startWorkflow: async (req) => {
-    set({ loading: true, error: null, events: [], artifacts: [], status: null, pendingHitl: null })
+    set({
+      loading: true,
+      error: null,
+      events: [],
+      artifacts: [],
+      status: null,
+      pendingHitl: null,
+      description: req.description,
+    })
     try {
       const started = await runWorkflow(req)
       set({ sessionId: started.session_id, loading: false })
@@ -149,6 +163,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     get().disconnectStream()
     set({
       sessionId: null,
+      description: null,
       status: null,
       events: [],
       artifacts: [],

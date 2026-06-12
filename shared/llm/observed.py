@@ -72,6 +72,11 @@ class ObservedLLMProvider(BaseLLMProvider):
         response = await self._inner.complete(prompt, system=system)
         latency_ms = response.latency_ms or (time.monotonic() - started) * 1000
 
+        # Tally tokens into the current request scope (kio_base reads this back).
+        from shared.llm import usage
+
+        usage.record(response.tokens_in, response.tokens_out)
+
         if not response.prompt:
             response.prompt = prompt
         if response.system is None:

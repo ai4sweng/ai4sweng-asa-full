@@ -4,6 +4,7 @@ import WorkflowLauncher from './components/WorkflowLauncher'
 import WorkflowStream from './components/WorkflowStream'
 import HitlPanel from './components/HitlPanel'
 import ArtifactViewer from './components/ArtifactViewer'
+import RunSummary from './components/RunSummary'
 
 function Header() {
   const { user, token, logout } = useAuthStore()
@@ -42,6 +43,7 @@ export default function App() {
             New Workflow
           </h2>
           <WorkflowLauncher />
+          <RunSummary />
         </aside>
 
         {/* Right panel — live stream + HITL + artifacts */}

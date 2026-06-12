@@ -302,6 +302,8 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
                     "artifact_id": artifact_id,
                     "step": step + 1,
                     "execution_time_ms": execution_time_ms,
+                    "tokens_in": resp.get("tokens_in", 0),
+                    "tokens_out": resp.get("tokens_out", 0),
                     "kio_sequence": new_seq,
                 },
             )
@@ -332,6 +334,8 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
                 "artifact_id": artifact_id,
                 "step": step + 1,
                 "execution_time_ms": execution_time_ms,
+                "tokens_in": resp.get("tokens_in", 0),
+                "tokens_out": resp.get("tokens_out", 0),
             },
         )
 
