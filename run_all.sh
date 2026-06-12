@@ -16,6 +16,10 @@ fi
 # shared/ and apps/kio_shells/ must be importable everywhere
 export PYTHONPATH="$ROOT:$ROOT/apps/kio_shells"
 
+# .env sets OLLAMA_BASE_URL=http://host.docker.internal:11434 for Docker containers.
+# Local processes need localhost instead.
+export OLLAMA_BASE_URL="http://localhost:11434"
+
 run_service() {
   local name="$1"
   local dir="$2"

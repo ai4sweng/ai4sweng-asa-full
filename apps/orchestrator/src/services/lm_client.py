@@ -37,11 +37,37 @@ class LmEngineClient:
         """
         system = (
             "You are a workflow planner for an AI software-engineering platform. "
-            "Given a task description, respond with ONLY a JSON object — no other text:\n"
-            '{"kio_sequence": ["kio3", "kio5"], "reasoning": "one sentence"}\n'
+            "Choose which KIO agents to run for the user's task.\n\n"
+            "What each KIO does:\n"
+            "- kio9: Code Generator — writes NEW code from a description (use when the "
+            "user wants software built and NO existing code is given)\n"
+            "- kio3: Repository Analyzer — reads an EXISTING codebase from disk\n"
+            "- kio4: Test Generator — writes pytest tests for code\n"
+            "- kio5: Bug Detector — finds bugs in code or in kio3 findings\n"
+            "- kio6: Patch Generator — fixes confirmed bugs (always pair with kio7)\n"
+            "- kio7: Test Re-runner — runs tests after patching\n"
+            "- kio8: Report Generator — final analysis report\n\n"
+            "ROUTING:\n"
+            "- The user asks to BUILD/WRITE/CREATE a program, application, app, tool, "
+            "script, function, class, or module (and gives NO code) → this is CODE "
+            "GENERATION → [\"kio9\"]. Do NOT use kio3/kio4/kio5 — there is nothing to "
+            "analyze yet.\n"
+            "- Build it AND check for bugs → [\"kio9\", \"kio5\"]\n"
+            "- Find bugs / analyze an EXISTING repo or code → [\"kio3\", \"kio5\"]\n"
+            "- Fix/patch existing code → [\"kio5\", \"kio6\", \"kio7\"]\n"
+            "- Full pipeline on a repo → [\"kio3\", \"kio4\", \"kio5\", \"kio6\", \"kio7\", \"kio8\"]\n"
+            "- When unsure and no code is given → [\"kio9\"]\n\n"
+            "Examples:\n"
+            '- "I need an application to find the protein from a list of foods" → '
+            '{"kio_sequence": ["kio9"], "reasoning": "build request, no code → code generation"}\n'
+            '- "build me a tool that converts CSV to JSON" → '
+            '{"kio_sequence": ["kio9"], "reasoning": "code generation"}\n'
+            '- "find security bugs in this repository" → '
+            '{"kio_sequence": ["kio3", "kio5"], "reasoning": "analyze existing repo"}\n\n'
+            "Respond with ONLY a JSON object — no other text:\n"
+            '{"kio_sequence": ["kio9"], "reasoning": "one sentence"}\n'
             "Valid KIO IDs: kio2, kio3, kio4, kio5, kio6, kio7, kio8, kio9, "
-            "kio10, kio11, kio12, kio13. "
-            "Pick only those needed. Return at most 8 KIOs."
+            "kio10, kio11, kio12, kio13. Pick only those needed. Return at most 8 KIOs."
         )
         for attempt in range(2):
             try:

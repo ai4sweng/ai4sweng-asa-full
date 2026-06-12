@@ -100,8 +100,8 @@ services:
     volumes:
       - minio-data:/data
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # web console
+      - "9002:9000"   # S3 API (9000 used by ClickHouse from Langfuse stack)
+      - "9003:9001"   # web console
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live"]
       interval: 10s
@@ -132,6 +132,7 @@ services:
     command: >
       sh -c "cd /app && alembic upgrade head"
     environment:
+      <<: *common-env
       DATABASE_URL: postgresql+asyncpg://enisalimerge:enisalimerge@postgres:5432/enisalimerge
     depends_on:
       postgres:

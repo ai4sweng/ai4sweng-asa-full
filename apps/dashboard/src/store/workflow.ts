@@ -15,6 +15,16 @@ interface WorkflowEvent {
   message: string
   data?: Record<string, unknown>
   timestamp?: string
+  // HITL_CHECKPOINT carries these at the top level (orchestrator flattens event.data)
+  checkpoint_id?: string
+  kio?: string
+  hitl_question?: string
+}
+
+interface PendingHitl {
+  checkpoint_id: string
+  kio: string
+  question: string
 }
 
 interface WorkflowStore {
@@ -22,6 +32,7 @@ interface WorkflowStore {
   status: WorkflowStatus | null
   events: WorkflowEvent[]
   artifacts: ArtifactInfo[]
+  pendingHitl: PendingHitl | null
   loading: boolean
   error: string | null
   eventSource: EventSource | null
@@ -40,12 +51,13 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   status: null,
   events: [],
   artifacts: [],
+  pendingHitl: null,
   loading: false,
   error: null,
   eventSource: null,
 
   startWorkflow: async (req) => {
-    set({ loading: true, error: null, events: [], artifacts: [], status: null })
+    set({ loading: true, error: null, events: [], artifacts: [], status: null, pendingHitl: null })
     try {
       const started = await runWorkflow(req)
       set({ sessionId: started.session_id, loading: false })
@@ -74,7 +86,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     set({ loading: true, error: null })
     try {
       await approveHitl(sessionId, feedback)
-      set({ loading: false })
+      set({ loading: false, pendingHitl: null })
     } catch (e) {
       set({ error: (e as Error).message, loading: false })
     }
@@ -88,7 +100,30 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       (data) => {
         const evt = data as unknown as WorkflowEvent
         set((s) => ({ events: [...s.events.slice(-199), evt] }))
-        // Auto-refresh status on significant events
+
+        // Drive the HITL panel straight off the event stream — do NOT depend on a
+        // status poll succeeding (that path can race or hit an id/auth hiccup and
+        // then the approve button never appears).
+        if (evt.event_type === 'HITL_CHECKPOINT' && evt.checkpoint_id) {
+          set({
+            pendingHitl: {
+              checkpoint_id: evt.checkpoint_id,
+              kio: evt.kio ?? '',
+              question: evt.hitl_question ?? evt.message,
+            },
+          })
+        }
+        // Any forward progress or terminal state clears the pending checkpoint.
+        if (
+          evt.event_type === 'HITL_APPROVED' ||
+          evt.event_type === 'KIO_DONE' ||
+          evt.event_type === 'WORKFLOW_COMPLETED' ||
+          evt.event_type === 'WORKFLOW_FAILED'
+        ) {
+          set({ pendingHitl: null })
+        }
+
+        // Auto-refresh status on significant events (best-effort; panel no longer relies on it)
         if (
           evt.event_type === 'KIO_DONE' ||
           evt.event_type === 'HITL_CHECKPOINT' ||
@@ -117,6 +152,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       status: null,
       events: [],
       artifacts: [],
+      pendingHitl: null,
       loading: false,
       error: null,
     })

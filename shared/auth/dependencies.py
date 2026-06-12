@@ -10,6 +10,7 @@ from .jwt_handler import decode_token
 from .schemas import UserInfo
 
 _bearer = HTTPBearer(auto_error=True)
+_bearer_optional = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
@@ -34,6 +35,21 @@ async def get_current_user(
             detail="Invalid authentication token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+async def get_current_user_optional(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_optional),
+) -> UserInfo | None:
+    """Like get_current_user but returns None instead of 401 when no Bearer
+    header is present.
+
+    Used by the SSE /events endpoint: the browser EventSource API cannot send an
+    Authorization header, so those clients authenticate via a ``?token=`` query
+    param instead. A non-erroring dependency lets the endpoint fall back to it.
+    """
+    if credentials is None:
+        return None
+    return await get_current_user(credentials)
 
 
 # Alias for explicit Depends usage in router signatures

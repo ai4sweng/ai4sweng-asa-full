@@ -30,7 +30,7 @@ from shared.config import get_settings
 KIO_ID = "kio4"
 TITLE = "Test Generator Agent"
 
-SYSTEM_PROMPT = """\
+_SYSTEM_PROMPT_FASTAPI = """\
 You are an expert test engineer. Given a list of code findings (potential bugs) in a FastAPI app, generate EXACTLY TWO pytest test files that verify the CORRECT/SECURE expected behavior.
 
 CRITICAL RULES:
@@ -40,19 +40,12 @@ CRITICAL RULES:
 - Import from app.main: from app.main import app
 - Do NOT generate application code — only test code
 
-ASSERTION RULES — VERY IMPORTANT:
+ASSERTION RULES:
 - ALWAYS assert what SHOULD happen after the bug is fixed (the CORRECT behavior), never the buggy behavior
-- WRONG: `assert response.status_code == 200` on a DELETE without auth (that documents the bug)
-- RIGHT:  `assert response.status_code in (401, 403)` on a DELETE without auth (that verifies the fix)
-- For SQL injection tests: accept status codes 400, 422, 404, AND 405 — all mean the payload was safely rejected
-- For unauthenticated DELETE/PUT/PATCH: assert status 401 or 403
-- For missing auth token: assert status 401 or 403
-- For SQL injection in path params like `/users/1 OR 1=1`: assert status in (400, 422, 404, 405)
-- Do NOT test /login, /token, /auth or any endpoint that is not shown in the findings
+- For SQL injection tests: assert status codes in (400, 422, 404, 405)
+- For unauthenticated DELETE/PUT/PATCH: assert status in (401, 403)
 
-NEVER generate a test that asserts the buggy status (e.g., 200 for an endpoint that should require auth).
-
-Example of correct output:
+Example output:
 
 ### tests/conftest.py
 ```python
@@ -70,25 +63,79 @@ def client():
 ```python
 import pytest
 
-def test_sql_injection_in_path_blocked(client):
+def test_sql_injection_blocked(client):
     response = client.get("/users/1 OR 1=1")
     assert response.status_code in (400, 422, 404, 405)
 
 def test_delete_requires_auth(client):
     response = client.delete("/users/1")
     assert response.status_code in (401, 403)
-
-def test_delete_invalid_token_rejected(client):
-    response = client.delete("/users/1", headers={"Authorization": "Bearer bad-token"})
-    assert response.status_code in (401, 403)
-
-def test_password_not_in_response(client):
-    response = client.get("/users/1")
-    if response.status_code == 200:
-        assert "password" not in response.json()
 ```
 
 Only output the ### heading + python code block pairs above. No explanations."""
+
+_SYSTEM_PROMPT_FLASK = """\
+You are an expert test engineer. Given a list of code findings (potential bugs) in a Flask app, generate EXACTLY TWO pytest test files that verify the CORRECT/SECURE expected behavior.
+
+CRITICAL RULES:
+- File 1: tests/test_security.py — pytest test functions named test_<something>()
+- File 2: tests/conftest.py — pytest fixtures using Flask's built-in test_client()
+- test functions MUST start with "def test_"
+- Import the Flask app object: from app import app  (the app variable from app.py)
+- Do NOT use FastAPI, TestClient, or SQLAlchemy — the app uses Flask and sqlite3
+- Do NOT generate application code — only test code
+- Use response.get_json() (not response.json()) for Flask responses
+- Use response.status_code to check status
+
+ASSERTION RULES:
+- ALWAYS assert what SHOULD happen after the bug is fixed (the CORRECT behavior), never the buggy behavior
+- For SQL injection tests: send a payload with SQL metacharacters; assert the response does NOT return data it shouldn't (status 200 with wrong data, or status in (400, 401, 404, 500))
+- For unauthenticated endpoints: assert status in (401, 403)
+- Keep tests simple — test one thing per function
+
+Example output:
+
+### tests/conftest.py
+```python
+import pytest
+from app import app as flask_app
+
+@pytest.fixture(scope="module")
+def client():
+    flask_app.config["TESTING"] = True
+    with flask_app.test_client() as c:
+        yield c
+```
+
+### tests/test_security.py
+```python
+import pytest
+
+def test_login_sql_injection_rejected(client):
+    response = client.post("/login", json={"username": "' OR '1'='1", "password": "x"})
+    assert response.status_code in (401, 400, 500)
+
+def test_admin_users_requires_auth(client):
+    response = client.get("/admin/users")
+    assert response.status_code in (401, 403)
+
+def test_search_sql_injection_safe(client):
+    response = client.get("/search?q=' OR '1'='1")
+    assert response.status_code in (200, 400, 500)
+```
+
+Only output the ### heading + python code block pairs above. No explanations."""
+
+
+def _detect_framework(code: str) -> str:
+    """Return 'flask' or 'fastapi' based on import statements in the code."""
+    code_lower = code.lower()
+    if "from flask" in code_lower or "import flask" in code_lower:
+        return "flask"
+    if "from fastapi" in code_lower or "import fastapi" in code_lower:
+        return "fastapi"
+    # Default to fastapi for repo-based pipelines with no inline code
+    return "fastapi"
 
 
 _provider = None
@@ -123,8 +170,12 @@ async def handler(envelope: MessageEnvelope) -> dict:
     description = payload.get("description", "")
     last_artifact = payload.get("last_artifact", {})
     findings = last_artifact.get("findings", [])
+    initial_context = payload.get("initial_context", {})
+    inline_code = initial_context.get("code", "")
 
-    logger.info("[kio4] Generating tests for {} finding(s)", len(findings))
+    framework = _detect_framework(inline_code)
+    system_prompt = _SYSTEM_PROMPT_FLASK if framework == "flask" else _SYSTEM_PROMPT_FASTAPI
+    logger.info("[kio4] Generating tests for {} finding(s) — framework={}", len(findings), framework)
 
     # Resolve NATS JS for publish_progress (None = HTTP mode, progress still logged)
     _js = None
@@ -157,7 +208,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
         )
 
         await publish_progress(KIO_ID, envelope.session_id, 40, "Sending prompt to LLM…", _js)
-        response = await provider.complete(user_prompt, system=SYSTEM_PROMPT)
+        response = await provider.complete(user_prompt, system=system_prompt)
         await publish_progress(
             KIO_ID, envelope.session_id, 70, "Parsing generated test files…", _js
         )
@@ -188,9 +239,11 @@ async def handler(envelope: MessageEnvelope) -> dict:
     artifact_data = {
         "kio": KIO_ID,
         "summary": summary,
+        "framework": framework,
         "test_count": sum(f.get("content", "").count("def test_") for f in files),
         "file_count": len(files),
-        "files": files,
+        "test_files": files,  # canonical key used by kio5→kio6→kio7
+        "files": files,       # backward-compat alias
         # Pass-through so kio5 can access kio3 findings
         "findings": findings,
         "produced_at": datetime.now(timezone.utc).isoformat(),

@@ -246,8 +246,9 @@ async def handler(envelope: MessageEnvelope) -> dict:
         "owasp_summary": owasp_summary,
         "owasp_error": owasp_error,  # empty string = success; non-empty = kio12 failed
         "hardened_files": hardened_files,
-        # Pass kio4's generated test files through so kio7 can write and run them
-        "test_files": last_artifact.get("files", []),
+        # Pass kio4's generated test files and framework through so kio7 can run them
+        "test_files": last_artifact.get("test_files", last_artifact.get("files", [])),
+        "framework": last_artifact.get("framework", "fastapi"),
         "produced_at": datetime.now(timezone.utc).isoformat(),
     }
 

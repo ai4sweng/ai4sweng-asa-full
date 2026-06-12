@@ -94,6 +94,8 @@ class WorkflowState(StrEnum):
     FAILED = "FAILED"
     TIMEOUT = "TIMEOUT"
     CANCELLED = "CANCELLED"
+    COMPENSATING = "COMPENSATING"
+    COMPENSATED = "COMPENSATED"
 
 
 # ---------------------------------------------------------------------------

@@ -236,18 +236,31 @@ def _sanitize_test_assertions(content: str) -> str:
 
 
 def _inject_test_imports(path: str, content: str) -> str:
-    """Prepend standard test imports to test_*.py files that lack them."""
+    """Prepend standard test imports to test_*.py files that lack them.
+
+    Detects the framework from the file content so Flask tests don't get
+    FastAPI/SQLAlchemy imports injected.
+    """
     fname = os.path.basename(path)
     if not (fname.startswith("test_") or fname.endswith("_test.py")):
         return content
-    # Sanitize backwards assertions before writing
     content = _sanitize_test_assertions(content)
-    # Only inject if the file doesn't already import TestClient
-    if "TestClient" not in content and "from app.main" not in content:
+
+    is_flask = "test_client" in content or "flask" in content.lower()
+    has_client_import = "TestClient" in content or "test_client" in content
+    has_app_import = "from app" in content or "import app" in content
+
+    # Flask tests: never inject FastAPI preamble; add minimal import if needed
+    if is_flask:
+        if not has_app_import:
+            return "from app import app as flask_app\nimport pytest\n\n" + content
+        return content
+
+    # FastAPI tests: inject full preamble only if truly missing
+    if "TestClient" not in content and not has_app_import:
         return _TEST_PREAMBLE + "\n" + content
-    # Ensure at minimum that TestClient and Session are importable
     lines = []
-    if "from fastapi.testclient import TestClient" not in content:
+    if "from fastapi.testclient import TestClient" not in content and "TestClient" not in content:
         lines.append("from fastapi.testclient import TestClient")
     if "from sqlalchemy.orm import Session" not in content and "Session" in content:
         lines.append("from sqlalchemy.orm import Session")
@@ -329,47 +342,80 @@ async def handler(envelope: MessageEnvelope) -> dict:
     )
 
     repo_path = _resolve_repo(working_directory)
-    if not repo_path:
-        logger.warning("[kio7] No repo found — skipping pytest")
+    code_snippet_mode = repo_path is None
+
+    if code_snippet_mode and not patches:
+        logger.warning("[kio7] No repo and no patches — skipping pytest")
         return {
             "status": "DONE",
             "artifact_id": str(uuid.uuid4()),
             "artifact_data": {
                 "kio": KIO_ID,
-                "error": "Repository not accessible in container",
+                "error": "No repository and no patches available for test re-run",
                 "passed": 0,
                 "failed": 0,
                 "total": 0,
+                "bugs_addressed": last_artifact.get("bugs_addressed", []),
+                "patches_applied": 0,
+                "patch_paths": [],
                 "produced_at": datetime.now(timezone.utc).isoformat(),
             },
-            "message": "Test re-run skipped: repo not mounted.",
+            "message": "Test re-run skipped: no repo and no patches.",
         }
+
+    if code_snippet_mode:
+        logger.info("[kio7] Code-snippet mode: building workspace from {} patch(es)", len(patches))
+    else:
+        logger.info("[kio7] Repo mode: {}", repo_path)
 
     pytest_summary: dict = {}
     interpretation = ""
 
     with tempfile.TemporaryDirectory(prefix="kio7_") as tmpdir:
-        # 1. Copy original repo
-        shutil.copytree(repo_path, tmpdir, dirs_exist_ok=True)
-        logger.info("[kio7] Workspace: {}", tmpdir)
+        if code_snippet_mode:
+            # Build workspace directly from patched files — no source repo needed.
+            # kio6 patches are the full corrected file contents.
+            for patch in patches:
+                rel = patch["path"].lstrip("/")
+                dest = os.path.join(tmpdir, rel)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                content = patch["content"]
+                if dest.endswith(".py"):
+                    try:
+                        compile(content, dest, "exec")
+                    except SyntaxError as syn_err:
+                        logger.warning("[kio7] Patch {} syntax error — skipping: {}", rel, syn_err)
+                        continue
+                with open(dest, "w") as f:
+                    f.write(content)
+                # Ensure package __init__.py exists
+                pkg_dir = os.path.dirname(dest)
+                init_path = os.path.join(pkg_dir, "__init__.py")
+                if pkg_dir != tmpdir and not os.path.exists(init_path):
+                    open(init_path, "w").close()
+                logger.info("[kio7] Wrote: {}", rel)
+        else:
+            # 1. Copy original repo
+            shutil.copytree(repo_path, tmpdir, dirs_exist_ok=True)
+            logger.info("[kio7] Workspace: {}", tmpdir)
 
-        # 2. Apply patches from kio6 (skip if syntax-invalid Python)
-        for patch in patches:
-            rel = patch["path"].lstrip("/")
-            dest = os.path.join(tmpdir, rel)
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            content = patch["content"]
-            if dest.endswith(".py"):
-                try:
-                    compile(content, dest, "exec")
-                except SyntaxError as syn_err:
-                    logger.warning(
-                        "[kio7] Patch {} has SyntaxError — keeping original: {}", rel, syn_err
-                    )
-                    continue
-            with open(dest, "w") as f:
-                f.write(content)
-            logger.info("[kio7] Patched: {}", rel)
+            # 2. Apply patches from kio6 (skip if syntax-invalid Python)
+            for patch in patches:
+                rel = patch["path"].lstrip("/")
+                dest = os.path.join(tmpdir, rel)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                content = patch["content"]
+                if dest.endswith(".py"):
+                    try:
+                        compile(content, dest, "exec")
+                    except SyntaxError as syn_err:
+                        logger.warning(
+                            "[kio7] Patch {} has SyntaxError — keeping original: {}", rel, syn_err
+                        )
+                        continue
+                with open(dest, "w") as f:
+                    f.write(content)
+                logger.info("[kio7] Patched: {}", rel)
 
         # 3. Patch database.py to read DATABASE_URL from env (repo has hardcoded URL)
         _apply_database_shim(tmpdir)
@@ -407,12 +453,14 @@ async def handler(envelope: MessageEnvelope) -> dict:
                 collect_err[:120],
             )
             patched_stderr = collect_err
-            for py_file in Path(repo_path).rglob("*.py"):
-                rel = str(py_file.relative_to(repo_path))
-                if not rel.startswith("tests/"):
-                    dest = os.path.join(tmpdir, rel)
-                    shutil.copy2(str(py_file), dest)
-            _apply_database_shim(tmpdir)
+            # In code-snippet mode there is no source repo to restore from — skip.
+            if repo_path:
+                for py_file in Path(repo_path).rglob("*.py"):
+                    rel = str(py_file.relative_to(repo_path))
+                    if not rel.startswith("tests/"):
+                        dest = os.path.join(tmpdir, rel)
+                        shutil.copy2(str(py_file), dest)
+                _apply_database_shim(tmpdir)
 
         await publish_progress(KIO_ID, envelope.session_id, 50, "Running pytest suite…", _js)
         # 8. Full pytest run
@@ -467,7 +515,10 @@ async def handler(envelope: MessageEnvelope) -> dict:
         "pytest_summary": pytest_summary,
         "interpretation": interpretation,
         "patches_applied": len(patches),
+        "patch_paths": [p.get("path", "") for p in patches],
         "test_files_used": len(test_files),
+        # Pass-through from kio6 so kio8 can build a complete evidence report
+        "bugs_addressed": last_artifact.get("bugs_addressed", []),
         "produced_at": datetime.now(timezone.utc).isoformat(),
     }
 

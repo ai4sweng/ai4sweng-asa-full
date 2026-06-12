@@ -22,6 +22,11 @@ async function request<T>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) {
+    // Token expired / invalid: bounce to login instead of failing silently in callers.
+    if (res.status === 401) {
+      sessionStorage.removeItem('kio1_token')
+      window.dispatchEvent(new Event('kio1:unauthorized'))
+    }
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail ?? res.statusText)
   }

@@ -82,8 +82,14 @@ async def handler(envelope: MessageEnvelope) -> dict:
     total = last_artifact.get("total", passed + failed)
     coverage = last_artifact.get("coverage_pct", 0)
     interpretation = last_artifact.get("interpretation", "")
+    bugs_addressed = last_artifact.get("bugs_addressed", [])
+    patches_applied = last_artifact.get("patches_applied", 0)
+    patch_paths = last_artifact.get("patch_paths", [])
 
-    logger.info("[kio8] Building evidence report. Tests: {}/{} passed", passed, total)
+    logger.info(
+        "[kio8] Building evidence report. Bugs={} Patches={} Tests={}/{} passed",
+        len(bugs_addressed), patches_applied, passed, total,
+    )
 
     _js = None
     try:
@@ -103,6 +109,11 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
         context = {
             "task": description,
+            "bugs_found": bugs_addressed,
+            "patches_applied": {
+                "count": patches_applied,
+                "files": patch_paths,
+            },
             "test_results": {
                 "passed": passed,
                 "failed": failed,
@@ -110,7 +121,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
                 "coverage_pct": coverage,
             },
             "interpretation": interpretation,
-            "pipeline": ["kio2", "kio3", "kio4", "kio5", "kio6", "kio7", "kio8"],
+            "pipeline": ["kio1", "kio3", "kio4", "kio5", "kio6", "kio7", "kio8"],
         }
 
         user_prompt = (
@@ -127,11 +138,15 @@ async def handler(envelope: MessageEnvelope) -> dict:
 
     except Exception as exc:
         logger.exception("[kio8] LLM report generation failed: {}", exc)
-        verdict = "PASS" if failed == 0 else "FAIL"
+        bug_count = len(bugs_addressed)
+        verdict = "PASS" if (bug_count > 0 and patches_applied > 0 and failed == 0) else "FAIL"
         report = {
-            "executive_summary": f"Pipeline completed for: {description[:100]}",
-            "findings": [],
-            "remediation": "See kio6 patches.",
+            "executive_summary": (
+                f"Pipeline completed for: {description[:100]}. "
+                f"{bug_count} bug(s) found and {patches_applied} patch(es) applied."
+            ),
+            "findings": [f"Bug {b} patched" for b in bugs_addressed],
+            "remediation": f"{patches_applied} file(s) patched: {', '.join(patch_paths)}",
             "test_evidence": f"{passed}/{total} tests passed, coverage {coverage}%.",
             "verdict": verdict,
             "verdict_reason": f"{'All tests passed.' if failed == 0 else f'{failed} test(s) failed.'}",

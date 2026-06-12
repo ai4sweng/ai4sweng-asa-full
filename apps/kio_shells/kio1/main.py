@@ -48,25 +48,45 @@ Available KIOs (in logical order):
 - kio7: Test Re-runner — runs tests after patching to verify fixes
 - kio8: Report Generator — produces a final analysis report
 
+CODE GENERATION is the most common request. ANY of these means the user wants NEW
+code written from scratch (no existing code to analyze) → use kio9:
+  "write code", "generate code", "create", "kod yaz",
+  "I need / I want / build / make / give me ... a program / an application / an app /
+   a tool / a script / a function / a class / a module ... that / to <does X>",
+  "... yapan bir uygulama / program / araç / script / fonksiyon".
+If the request describes a piece of software to BUILD and NO code snippet is provided,
+it is a CODE GENERATION request → ["kio1","kio9"]. Do NOT route build requests to
+kio3 (needs a repo on disk), kio4, or kio5 — there is nothing to analyze yet.
+
 Routing rules:
-- "kod yaz / generate code / write code / create" with no code provided → ["kio1","kio9","kio5"]
-- "kod yaz ... ve bug bul / hata yap" with no code → ["kio1","kio9","kio5"]
+- Build/write a program/app/tool/script/function (no code provided) → ["kio1","kio9"]
+- Build it AND check it for bugs (no code) → ["kio1","kio9","kio5"]
+- "kod yaz / generate code / write code / create" with no code provided → ["kio1","kio9"]
 - Code is provided + "bug / vulnerability / güvenlik / hata" → ["kio1","kio5"]
 - Code is provided + "fix / patch / düzelt" → ["kio1","kio5","kio6","kio7"]
 - "test yaz / test generate" → ["kio1","kio4"]
-- "analyze / incele / analiz et" → ["kio1","kio3","kio5"]
+- "analyze / incele / analiz et" an EXISTING repo/codebase → ["kio1","kio3","kio5"]
 - "full / complete / hepsi / tüm pipeline" → ["kio1","kio3","kio4","kio5","kio6","kio7","kio8"]
 - "report / rapor" alone → ["kio1","kio8"]
-- Default when unsure: ["kio1","kio5"]
+- Default when unsure AND no code provided → ["kio1","kio9"]
+- Default when unsure AND code provided → ["kio1","kio5"]
 
 ALWAYS include "kio1" as the first element.
 Include "kio7" whenever "kio6" is included (verify patches work).
 Set hitl_after to ["kio5"] whenever kio5 is in the sequence.
 
+Examples:
+- "I need an application to find the protein from a list of foods" (no code)
+  → {"kio_sequence":["kio1","kio9"],"hitl_after":[],"description":"Generate a program that filters protein-rich foods from a list","reasoning":"Build request, no existing code → code generation"}
+- "Write a function that reverses a string" (no code)
+  → {"kio_sequence":["kio1","kio9"],"hitl_after":[],"description":"Generate a string-reversal function","reasoning":"Code generation request"}
+- "Find security bugs in this repo" (existing codebase)
+  → {"kio_sequence":["kio1","kio3","kio5"],"hitl_after":["kio5"],"description":"Scan the repository and confirm security bugs","reasoning":"Analyze an existing codebase"}
+
 Return ONLY valid JSON, no markdown:
 {
-  "kio_sequence": ["kio1", "kio5"],
-  "hitl_after": ["kio5"],
+  "kio_sequence": ["kio1", "kio9"],
+  "hitl_after": [],
   "description": "one-line description of what the pipeline will do",
   "reasoning": "why you chose this pipeline"
 }"""

@@ -78,7 +78,7 @@ async def _build_repo_context(repo_path: str) -> str:
     parts = []
     for rel_path in rel_paths:
         ctx = builder.read_file_context(rel_path)
-        parts.append(f"## {rel_path}\n```\n{ctx.content}\n```")
+        parts.append(f"## {rel_path}\n```\n{ctx.excerpt}\n```")
     return "\n\n".join(parts)
 
 

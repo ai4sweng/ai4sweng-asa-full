@@ -2,10 +2,12 @@ import { useState } from 'react'
 import { useWorkflowStore } from '../store/workflow'
 
 export default function HitlPanel() {
-  const { status, approve, loading } = useWorkflowStore()
+  const { pendingHitl, approve, loading } = useWorkflowStore()
   const [feedback, setFeedback] = useState('')
 
-  if (!status || status.status !== 'PENDING_REVIEW') return null
+  // Driven by the SSE HITL_CHECKPOINT event, not a status poll — so the panel
+  // appears the instant the workflow blocks, regardless of polling races.
+  if (!pendingHitl) return null
 
   const handleApprove = () => {
     approve(feedback.trim())
@@ -16,11 +18,14 @@ export default function HitlPanel() {
     <div className="mt-4 p-4 bg-yellow-950 border border-yellow-700 rounded-xl">
       <div className="flex items-center gap-2 mb-3">
         <span className="text-yellow-400 text-lg">⏸</span>
-        <h3 className="text-yellow-300 font-semibold text-sm">Human Review Required</h3>
+        <h3 className="text-yellow-300 font-semibold text-sm">
+          Human Review Required{pendingHitl.kio ? ` — ${pendingHitl.kio.toUpperCase()}` : ''}
+        </h3>
       </div>
+      <p className="text-yellow-200 text-sm mb-2">{pendingHitl.question}</p>
       <p className="text-yellow-200 text-xs mb-4">
         Checkpoint: <code className="bg-yellow-900 px-1 rounded">
-          {status.pending_checkpoint_id?.slice(0, 16)}…
+          {pendingHitl.checkpoint_id.slice(0, 16)}…
         </code>
       </p>
 

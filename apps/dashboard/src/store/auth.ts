@@ -46,3 +46,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ user: null, token: null, error: null })
   },
 }))
+
+// When any API call gets a 401 (expired/invalid token), drop back to the login screen.
+if (typeof window !== 'undefined') {
+  window.addEventListener('kio1:unauthorized', () => {
+    useAuthStore.getState().logout()
+  })
+}

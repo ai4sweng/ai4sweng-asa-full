@@ -125,7 +125,7 @@ async def _read_buggy_files(repo_path: str, bugs: list[dict]) -> str:
             or not bug_files
         ):
             ctx = builder.read_file_context(rel_path)
-            parts.append(f"### {rel_path}\n```python\n{ctx.content}\n```")
+            parts.append(f"### {rel_path}\n```python\n{ctx.excerpt}\n```")
     return "\n\n".join(parts) if parts else ""
 
 
@@ -136,6 +136,8 @@ async def handler(envelope: MessageEnvelope) -> dict:
     repo_path = payload.get("working_directory", "") or get_settings().target_repo_path
     last_artifact = payload.get("last_artifact", {})
     bugs = last_artifact.get("bugs", [])
+    initial_context = payload.get("initial_context", {})
+    inline_code = initial_context.get("code", "")
 
     logger.info("[kio6] Patching {} confirmed bug(s). Feedback: '{}'", len(bugs), feedback[:80])
 
@@ -158,6 +160,12 @@ async def handler(envelope: MessageEnvelope) -> dict:
         llm_override = payload.get("llm_provider_override", "")
         provider = await _get_provider(llm_override)
         source_context = await _read_buggy_files(repo_path, bugs)
+
+        # Code-snippet mode: use the submitted code as source when no repo is on disk
+        if not source_context and inline_code:
+            source_context = f"### app.py\n```python\n{inline_code}\n```"
+            logger.info("[kio6] No repo — using inline code snippet as source context ({} chars)", len(inline_code))
+
         bugs_text = json.dumps(bugs, indent=2)
 
         user_prompt = (
@@ -204,6 +212,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
         "patches": patches,
         # Pass kio4's test files through (received from kio5) so kio7 can use them
         "test_files": last_artifact.get("test_files", []),
+        "framework": last_artifact.get("framework", "fastapi"),
         "produced_at": datetime.now(timezone.utc).isoformat(),
     }
 

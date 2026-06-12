@@ -14,7 +14,7 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from shared.auth.dependencies import get_current_user
+from shared.auth.dependencies import get_current_user, get_current_user_optional
 from shared.auth.schemas import UserInfo
 
 from ..engine.event_bus import get_event_bus
@@ -245,7 +245,7 @@ async def cancel_workflow(
 @router.get("/events")
 async def event_stream(
     token: str | None = None,
-    current_user: UserInfo | None = Depends(get_current_user),
+    current_user: UserInfo | None = Depends(get_current_user_optional),
 ):
     """Server-Sent Events stream for real-time workflow progress.
 
