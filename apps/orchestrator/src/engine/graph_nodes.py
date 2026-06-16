@@ -39,10 +39,44 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
     # ------------------------------------------------------------------
 
     async def plan_node(state: WorkflowGraphState) -> dict[str, Any]:
-        """Plan the KIO sequence via LM Engine if none was supplied."""
+        """Plan the KIO sequence (via LM Engine if none supplied), then run
+        process reflection — a precondition check that repairs a wrong plan
+        (e.g. patching before bugs are confirmed) before it reaches dispatch."""
+        from .process_reflection import validate_and_repair_plan
+
         session_id = state["session_id"]
+        has_repo = bool(state.get("working_directory"))
+        has_code = bool(state.get("initial_context", {}).get("code"))
+
+        def _reflect_and_ready(
+            seq: list[str], reasoning: str = "", confidence_low: bool = False
+        ) -> dict[str, Any]:
+            """Validate/repair the proposed plan, emit events, mark it READY."""
+            result = validate_and_repair_plan(seq, has_repo=has_repo, has_code=has_code)
+            # Never empty the plan on a failed repair — fall back to the proposal.
+            final = result.sequence or seq
+            if result.changed and result.sequence:
+                _emit(
+                    "PLAN_REFLECTION",
+                    session_id,
+                    "Plan adjusted by process reflection: " + "; ".join(result.notes),
+                    {"before": seq, "after": final, "notes": result.notes},
+                )
+            if session_id in active:
+                active[session_id]["kio_sequence"] = final
+                active[session_id]["total"] = len(final)
+                active[session_id]["status"] = "READY"
+            _emit(
+                "WORKFLOW_READY",
+                session_id,
+                f"Pipeline ready: {' → '.join(k.upper() for k in final)}",
+                {"kio_sequence": final, "reasoning": reasoning},
+            )
+            return {"kio_sequence": final, "plan_confidence_low": confidence_low}
+
         if state.get("kio_sequence"):
-            # Pipeline already provided — skip validation, mark READY
+            # Pipeline explicitly provided (manual selection) — trust the caller's
+            # choice; reflection only guards the LLM planner's guess below.
             if session_id in active:
                 active[session_id]["status"] = "READY"
             _emit(
@@ -51,7 +85,8 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
                 f"Pipeline ready: {' → '.join(k.upper() for k in state['kio_sequence'])}",
                 {"kio_sequence": state["kio_sequence"]},
             )
-            return {}
+            return {"plan_confidence_low": False}
+
         # Need LM planning — transition to VALIDATING (Slide 19)
         if session_id in active:
             active[session_id]["status"] = "VALIDATING"
@@ -60,19 +95,10 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
             session_id,
             "Validating workflow description and planning pipeline…",
         )
-        kio_seq, reasoning = await lm.plan_workflow(state["description"], session_id)
-        arrow = " → ".join(k.upper() for k in kio_seq)
-        if session_id in active:
-            active[session_id]["kio_sequence"] = kio_seq
-            active[session_id]["total"] = len(kio_seq)
-            active[session_id]["status"] = "READY"
-        _emit(
-            "WORKFLOW_READY",
-            session_id,
-            f"Pipeline ready: {arrow}",
-            {"kio_sequence": kio_seq, "reasoning": reasoning},
+        kio_seq, reasoning, used_fallback = await lm.plan_workflow(
+            state["description"], session_id
         )
-        return {"kio_sequence": kio_seq}
+        return _reflect_and_ready(kio_seq, reasoning, confidence_low=used_fallback)
 
     # ------------------------------------------------------------------
     # run_kio
@@ -339,7 +365,54 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
             },
         )
 
-        return {"last_result": result, "artifacts": [artifact_id], "feedback": ""}
+        update: dict = {"last_result": result, "artifacts": [artifact_id], "feedback": ""}
+
+        # Data reflection — is this result adequate for the downstream plan?
+        # If not (e.g. kio5 confirmed no bugs), prune the now-pointless steps so
+        # the pipeline doesn't run a patch/re-test on empty input.
+        from .data_reflection import reflect_on_result
+
+        downstream = kio_seq[step + 1 :]
+        dr = reflect_on_result(kio_id, artifact_data, downstream)
+        if dr.pruned:
+            new_seq = kio_seq[: step + 1] + dr.remaining
+            if session_id in active:
+                active[session_id]["kio_sequence"] = new_seq
+                active[session_id]["total"] = len(new_seq)
+            update["kio_sequence"] = new_seq
+            _emit(
+                "DATA_REFLECTION",
+                session_id,
+                "Plan pruned by data reflection: " + "; ".join(dr.notes),
+                {
+                    "after_step": step + 1,
+                    "pruned": dr.pruned,
+                    "kio_sequence": new_seq,
+                    "notes": dr.notes,
+                },
+            )
+
+        # Draft reflection — does this step signal an unresolved outcome
+        # (e.g. kio7 reports failing tests)? Recorded for the completion gate.
+        from .draft_reflection import assess_step
+
+        outcome = assess_step(kio_id, artifact_data)
+        if outcome is not None:
+            update["outcome_status"] = outcome
+            if outcome != "OK":
+                _emit(
+                    "DRAFT_REFLECTION",
+                    session_id,
+                    f"Draft reflection: {kio_id.upper()} reports an unresolved outcome ({outcome})",
+                    {
+                        "kio": kio_id,
+                        "outcome": outcome,
+                        "passed": artifact_data.get("passed"),
+                        "failed": artifact_data.get("failed"),
+                    },
+                )
+
+        return update
 
     # ------------------------------------------------------------------
     # hitl
@@ -458,19 +531,36 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
     # ------------------------------------------------------------------
 
     async def complete_node(state: WorkflowGraphState) -> dict[str, Any]:
-        """Mark the session COMPLETED in Session Manager and emit the final event."""
+        """Mark the session COMPLETED and emit the final event.
+
+        Draft reflection: if a step flagged an unresolved outcome (e.g. kio7
+        reported failing tests), the run is reported as completed *with issues*
+        so the result never claims success over a broken build.  The session
+        status stays terminal COMPLETED so downstream consumers are unaffected.
+        """
         session_id = state["session_id"]
         kio_count = len(state["kio_sequence"])
+        outcome = state.get("outcome_status", "") or "OK"
+        has_issues = outcome not in ("", "OK")
+
         await sm.update_status(session_id, "COMPLETED")
         if session_id in active:
             active[session_id]["status"] = "COMPLETED"
             active[session_id]["progress"] = kio_count
             active[session_id]["active_kio"] = None
+            active[session_id]["outcome"] = outcome
+        if has_issues:
+            message = (
+                f"Workflow COMPLETED WITH ISSUES — {outcome.replace('_', ' ').lower()} "
+                f"({kio_count}/{kio_count} KIOs)."
+            )
+        else:
+            message = f"Workflow COMPLETED — {kio_count}/{kio_count} KIOs done."
         _emit(
             "WORKFLOW_COMPLETED",
             session_id,
-            f"Workflow COMPLETED — {kio_count}/{kio_count} KIOs done.",
-            {"session_id": session_id},
+            message,
+            {"session_id": session_id, "outcome": outcome, "has_issues": has_issues},
         )
         # Notify orchestrator state machine
         try:
@@ -488,8 +578,74 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
         return {"status": "COMPLETED"}
 
     # ------------------------------------------------------------------
+    # plan_review (confidence-gated HITL)
+    # ------------------------------------------------------------------
+
+    async def plan_review_node(state: WorkflowGraphState) -> dict[str, Any]:
+        """Pause for human approval when routing confidence is low.
+
+        Entered only when the planner fell back to a default route
+        (``plan_confidence_low``).  Blocks via interrupt() *before* the first KIO
+        runs, so a misrouted low-confidence pipeline can't act until a human
+        approves it.  Resumes (→ run_kio) when the orchestrator calls approve();
+        the operator cancels via the existing /cancel endpoint to abort.
+        """
+        from langgraph.types import interrupt
+
+        session_id = state["session_id"]
+        seq = state.get("kio_sequence", [])
+        arrow = " → ".join(k.upper() for k in seq)
+        hitl_q = (
+            "Routing confidence is LOW — the planner fell back to a default route. "
+            f"Proposed pipeline: {arrow}. Approve to run it, or cancel the workflow."
+        )
+
+        checkpoint = await sm.create_hitl_checkpoint(
+            session_id, step="plan_review", artifact_id=str(uuid.uuid4())
+        )
+        checkpoint_id: str = checkpoint["checkpoint_id"]
+
+        if session_id in active:
+            active[session_id]["status"] = "BLOCKED"
+            active[session_id]["pending_checkpoint_id"] = checkpoint_id
+
+        _emit(
+            "WORKFLOW_BLOCKED",
+            session_id,
+            "Workflow blocked — low routing confidence, awaiting plan approval",
+            {"checkpoint_id": checkpoint_id, "reason": "low_routing_confidence"},
+        )
+        _emit(
+            "HITL_CHECKPOINT",
+            session_id,
+            f"[HITL] {hitl_q}",
+            {
+                "checkpoint_id": checkpoint_id,
+                "hitl_question": hitl_q,
+                "kio_sequence": seq,
+                "reason": "low_routing_confidence",
+            },
+        )
+
+        feedback = interrupt(
+            {
+                "checkpoint_id": checkpoint_id,
+                "hitl_question": hitl_q,
+                "reason": "low_routing_confidence",
+            }
+        )
+        if session_id in active:
+            active[session_id]["status"] = "ACTIVE"
+            active[session_id]["pending_checkpoint_id"] = None
+        return {"feedback": feedback or "", "pending_checkpoint_id": None}
+
+    # ------------------------------------------------------------------
     # Conditional edge functions
     # ------------------------------------------------------------------
+
+    def should_review_plan(state: WorkflowGraphState) -> str:
+        """Gate a HITL plan review when routing confidence is low."""
+        return "plan_review" if state.get("plan_confidence_low") else "run_kio"
 
     def should_hitl(state: WorkflowGraphState) -> str:
         """Route to 'hitl' if the KIO requested review or an LLM retry is pending."""
@@ -511,9 +667,11 @@ def make_nodes(sm, kio, lm, bus: EventBus, active: dict) -> dict:
     return {
         "plan": plan_node,
         "run_kio": run_kio_node,
+        "plan_review": plan_review_node,
         "hitl": hitl_node,
         "advance": advance_node,
         "complete": complete_node,
+        "should_review_plan": should_review_plan,
         "should_hitl": should_hitl,
         "should_continue": should_continue,
     }

@@ -26,9 +26,15 @@ class WorkflowGraphState(TypedDict):
     feedback: str
     status: str
     error: str | None
+    # Set by draft reflection when a step signals an unresolved result
+    # (e.g. kio7 reports failing tests); read by complete_node to flag the run.
+    outcome_status: str
 
     # --- HITL ---
     pending_checkpoint_id: str | None
+    # True when the planner fell back to a default route (low routing confidence);
+    # gates a plan-review HITL checkpoint before the first KIO runs.
+    plan_confidence_low: bool
 
     # --- Prompt router ---
     # Injected by /workflow/prompt; passed to kio1 so it can route on code+prompt

@@ -173,6 +173,8 @@ class WorkflowRunner:
             "status": "QUEUED",
             "error": None,
             "pending_checkpoint_id": None,
+            "plan_confidence_low": False,
+            "outcome_status": "",
             "initial_context": initial_context or {},
             "llm_provider_override": "",
             "llm_retry_pending": False,

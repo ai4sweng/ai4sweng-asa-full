@@ -135,6 +135,35 @@ async def test_two_step_pipeline_completes():
     assert status == "COMPLETED"
 
 
+async def test_data_reflection_prunes_patch_steps_when_no_bugs():
+    """End-to-end: kio5 confirms zero bugs → kio6/kio7 pruned, run still completes."""
+    sm = _make_sm()
+    kio = _make_kio(
+        [
+            {
+                "status": "DONE",
+                "artifact_id": str(uuid.uuid4()),
+                "artifact_data": {"bugs": [], "confirmed_count": 0},
+                "message": "no confirmed bugs",
+            },
+        ]
+    )
+    runner, _ = _make_runner(sm, kio)
+
+    session_id = await runner.run(
+        workflow_id=str(uuid.uuid4()),
+        kio_sequence=["kio5", "kio6", "kio7"],
+        hitl_after=[],
+        owner="test",
+        description="check this repo for bugs",
+    )
+
+    status = await _wait_sm_status(sm, session_id, {"COMPLETED", "FAILED"})
+    assert status == "COMPLETED"
+    # Only kio5 ran; kio6 and kio7 were pruned by data reflection.
+    assert kio.execute.call_count == 1
+
+
 async def test_three_step_pipeline_calls_all_kios():
     sm = _make_sm()
     kio = _make_kio()
