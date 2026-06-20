@@ -8,12 +8,17 @@ import pytest
 class TestSettings:
     def test_default_values(self):
         from shared.config import Settings
-        s = Settings()
-        assert s.nats_url == "nats://localhost:4222"
-        assert s.jwt_algorithm == "HS256"
-        assert s.llm_provider == "ollama"
-        assert s.db_pool_size == 10
-        assert s.db_max_overflow == 20
+
+        assert Settings.model_fields["nats_host"].default == "localhost"
+        assert Settings.model_fields["nats_port"].default == 4222
+        assert Settings.model_fields["jwt_algorithm"].default == "HS256"
+        assert Settings.model_fields["llm_provider"].default == "ollama"
+        assert Settings.model_fields["db_pool_size"].default == 10
+        assert Settings.model_fields["db_max_overflow"].default == 20
+        assert Settings.model_fields["openrouter_model"].default == "google/gemma-7b-it"
+        assert Settings.model_fields["openrouter_api_key"].default == ""
+
+
 
     def test_target_repo_path_normalizes_empty(self):
         from shared.config import Settings
@@ -46,6 +51,13 @@ class TestSettings:
 
     def test_openai_and_anthropic_keys(self):
         from shared.config import Settings
-        s = Settings(openai_api_key="sk-test", anthropic_api_key="sk-ant-test")
+        s = Settings(
+            openai_api_key="sk-test",
+            anthropic_api_key="sk-ant-test",
+            openrouter_api_key="sk-or-test",
+        )
         assert s.openai_api_key == "sk-test"
         assert s.anthropic_api_key == "sk-ant-test"
+        assert s.openrouter_api_key == "sk-or-test"
+
+

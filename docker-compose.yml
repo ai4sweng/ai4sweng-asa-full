@@ -24,6 +24,8 @@ x-common-env: &common-env
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemma-7b-it}
   LLM_PROVIDER_FALLBACK: ${LLM_PROVIDER_FALLBACK:-}
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
   JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-60}
@@ -175,6 +177,8 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:3b}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemma-7b-it}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
