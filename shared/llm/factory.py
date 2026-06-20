@@ -9,6 +9,7 @@ from shared.llm.mock import MockLLMProvider
 from shared.llm.observed import ObservedLLMProvider
 from shared.llm.ollama_provider import OllamaProvider, OllamaUnavailableError
 from shared.llm.openai_provider import OpenAIProvider
+from shared.llm.openrouter_provider import OpenRouterProvider
 from shared.observability.observability import ObservabilityService
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,13 @@ async def create_llm_provider(
         inner = OpenAIProvider(model=cfg.openai_model, api_key=cfg.openai_api_key)
         logger.info("Using OpenAI model=%s", cfg.openai_model)
 
+    elif provider == "openrouter":
+        if not cfg.openrouter_api_key:
+            logger.error("LLM_PROVIDER=openrouter but OPENROUTER_API_KEY is not set")
+            raise SystemExit(1)
+        inner = OpenRouterProvider(model=cfg.openrouter_model, api_key=cfg.openrouter_api_key)
+        logger.info("Using OpenRouter model=%s", cfg.openrouter_model)
+
     elif provider in ("claude", "anthropic"):
         if not cfg.anthropic_api_key:
             logger.error("LLM_PROVIDER=claude but ANTHROPIC_API_KEY is not set")
@@ -73,7 +81,7 @@ async def create_llm_provider(
 
     else:
         logger.error(
-            "Unknown LLM_PROVIDER='%s'. Supported: mock, ollama, openai, claude",
+            "Unknown LLM_PROVIDER='%s'. Supported: mock, ollama, openai, openrouter, claude",
             provider,
         )
         raise SystemExit(1)

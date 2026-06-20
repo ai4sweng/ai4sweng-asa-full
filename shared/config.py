@@ -93,6 +93,8 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o"
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
+    openrouter_api_key: str = ""
+    openrouter_model: str = "google/gemma-7b-it"
     # When non-empty, HITL is triggered on pipeline failure offering this as the retry provider
     llm_provider_fallback: str = ""
 
