@@ -382,7 +382,14 @@ class TestKio8Handler:
         with patch("kio8.main._get_provider", return_value=broken):
             result = await handler(_envelope("kio8", {
                 "description": "Pass report",
-                "last_artifact": {"passed": 20, "failed": 0, "total": 20},
+                "last_artifact": {
+                    "passed": 20,
+                    "failed": 0,
+                    "total": 20,
+                    "bugs_addressed": ["BUG-001"],
+                    "patches_applied": 1,
+                },
             }))
 
         assert result["artifact_data"]["report"]["verdict"] == "PASS"
+
