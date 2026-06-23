@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     # ── LLM providers ─────────────────────────────────────────────────────────
     llm_provider: str = "ollama"
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5-coder:3b"
+    ollama_model: str = "qwen2.5-coder:7b"
     ollama_max_tokens: int = 2048
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
@@ -95,6 +95,15 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-4-6"
     # When non-empty, HITL is triggered on pipeline failure offering this as the retry provider
     llm_provider_fallback: str = ""
+
+    # ── Planner model (orchestrator plan stage only) ──────────────────────────
+    # The plan stage (pipeline selection, clarification, plan critic) is a low-
+    # volume, latency-tolerant, structured-JSON task — a strong hosted model is
+    # cheap here and far more reliable than the local model at emitting valid
+    # JSON. Set planner_provider="anthropic" to route planning to Claude Haiku;
+    # the LM Engine (local model) remains the automatic fallback on any error.
+    planner_provider: str = ""  # "" = use LM Engine like before; "anthropic"/"claude" = Haiku
+    planner_model: str = "claude-haiku-4-5"
 
     # ── Auto-approve HITL (CI/test only) ─────────────────────────────────────
     auto_approve_human: bool = False
