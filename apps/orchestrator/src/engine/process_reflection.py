@@ -59,7 +59,11 @@ _PRODUCER_OF: dict[str, str] = {
     "patch": "kio6",
 }
 
-_MAX_PLAN_LEN = 8
+# Kept consistent with the planner's own cap (lm_client._MAX_KIO_SEQUENCE_LEN):
+# large multi-goal plans can legitimately need most of the routable KIOs, and an
+# 8-cap here silently re-truncated a plan the planner had already sized correctly.
+_MAX_PLAN_LEN = 12
+_REPORT_KIO = "kio8"
 
 
 @dataclass
@@ -74,6 +78,7 @@ def validate_and_repair_plan(
     *,
     has_repo: bool,
     has_code: bool,
+    report_requested: bool = False,
 ) -> ReflectionResult:
     """Check + repair a proposed KIO plan against its preconditions.
 
@@ -81,6 +86,11 @@ def validate_and_repair_plan(
         kio_sequence: the proposed ordered list of KIO ids.
         has_repo: True if a repository is available on disk (working_directory).
         has_code: True if a code snippet was supplied (initial_context["code"]).
+        report_requested: True if the user asked for a report/summary. When set
+            and the planner omitted the report agent (kio8), it is appended as the
+            terminal step — the report is the user's deliverable, so a planner that
+            forgets it (common on large multi-goal plans) shouldn't silently ship a
+            pipeline with no report.
 
     Returns a :class:`ReflectionResult` with the (possibly repaired) sequence,
     whether anything changed, and human-readable notes describing each repair.
@@ -135,5 +145,19 @@ def validate_and_repair_plan(
             available |= _PRODUCES.get(kio, frozenset())
         i += 1
 
-    out = out[:_MAX_PLAN_LEN]
+    # A requested report must exist: if the planner asked for one but omitted
+    # kio8, append it as the terminal deliverable before the cap (which then
+    # guarantees it survives in the final slot).
+    if report_requested and _REPORT_KIO not in out:
+        out.append(_REPORT_KIO)
+        notes.append(f"appended {_REPORT_KIO} (report requested but planner omitted it)")
+
+    # Cap length, but never let truncation drop the report (kio8) — same
+    # guarantee the planner applies, so it holds end-to-end through reflection.
+    if len(out) > _MAX_PLAN_LEN:
+        capped = out[:_MAX_PLAN_LEN]
+        if _REPORT_KIO in out and _REPORT_KIO not in capped:
+            capped[-1] = _REPORT_KIO
+            notes.append("preserved kio8 (report) in the final slot under length cap")
+        out = capped
     return ReflectionResult(sequence=out, changed=(out != original), notes=notes)

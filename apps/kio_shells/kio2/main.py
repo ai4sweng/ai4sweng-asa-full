@@ -63,14 +63,30 @@ Return ONLY valid JSON, no markdown fences:
     {"kio": "kio3", "purpose": "one sentence why this stage is needed"}
   ],
   "reasoning": "overall 2-3 sentence rationale for the plan",
+  "rejected": [{"kio": "kio4", "reason": "one line why this agent was left out"}],
   "confidence": 0.9
 }
+("rejected" lists agents you considered but left out, each with a one-line
+reason — empty list if none.)
 
 Rules:
 - pipeline[0] MUST be "kio2" (the planner itself).
 - pipeline[-1] MUST be "kio8" (the evidence reporter).
 - hitl_after must be a subset of pipeline, usually ["kio5"] if kio5 is included.
-- If no source code / repo is mentioned, use a minimal pipeline: ["kio2", "kio8"]."""
+- If no source code / repo is mentioned, use a minimal pipeline: ["kio2", "kio8"].
+
+Clarification mode:
+- If the task is gibberish, off-topic (e.g. "I want you to cook fish"), empty, or
+  too vague to choose any pipeline, DO NOT guess a pipeline. Instead ask the user
+  what they mean. Return ONLY this JSON (no markdown fences):
+  {
+    "needs_clarification": true,
+    "question": "<one short question>",
+    "options": ["<choice 1>", "<choice 2>", "<choice 3>", "<choice 4>"]
+  }
+  Give up to 4 concrete, distinct choices the user might have meant, phrased as
+  actions this platform can take. A free-text "Other" choice is added by the UI,
+  so do not include one."""
 
 
 _provider = None
@@ -124,6 +140,36 @@ async def handler(envelope: MessageEnvelope) -> dict:
             plan = json.loads(raw)
         except json.JSONDecodeError:
             logger.warning("[kio2] LLM returned non-JSON, using full pipeline")
+            plan = None
+
+        # Clarification mode: the task was too vague/off-topic to plan, so ask the
+        # user what they mean (with options) instead of hallucinating a pipeline.
+        if isinstance(plan, dict) and plan.get("needs_clarification"):
+            question = str(plan.get("question", "")).strip() or (
+                "Could you clarify what you'd like me to do?"
+            )
+            options = [
+                str(o).strip() for o in (plan.get("options") or []) if str(o).strip()
+            ][:4]
+            await publish_progress(
+                KIO_ID, envelope.session_id, 90, "Clarification needed", js
+            )
+            logger.info("[kio2] clarification needed: {}", question)
+            return {
+                "status": "NEEDS_CLARIFICATION",
+                "artifact_id": str(uuid.uuid4()),
+                "artifact_data": {
+                    "kio": KIO_ID,
+                    "question": question,
+                    "options": options,
+                    "allow_other": True,
+                    "produced_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "hitl_question": question,
+                "message": f"Clarification needed: {question}",
+            }
+
+        if plan is None:
             plan = {
                 "pipeline": FULL_PIPELINE,
                 "hitl_after": ["kio5"],
@@ -157,6 +203,7 @@ async def handler(envelope: MessageEnvelope) -> dict:
                 "hitl_after": hitl_after,
                 "stages": plan.get("stages", []),
                 "reasoning": plan.get("reasoning", ""),
+                "rejected": plan.get("rejected", []),
                 "confidence": plan.get("confidence", 1.0),
                 "produced_at": datetime.now(timezone.utc).isoformat(),
             },

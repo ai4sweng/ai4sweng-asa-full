@@ -31,7 +31,7 @@ async def _main(apply_reflection: bool, min_first_step: float) -> int:
     client = get_lm_client()
 
     async def router(description: str) -> tuple[list[str], bool]:
-        kios, _reasoning, used_fallback = await client.plan_workflow(description, "eval")
+        kios, _reasoning, used_fallback, _rejected = await client.plan_workflow(description, "eval")
         return kios, used_fallback
 
     try:

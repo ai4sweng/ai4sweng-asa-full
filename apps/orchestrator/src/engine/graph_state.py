@@ -23,6 +23,10 @@ class WorkflowGraphState(TypedDict):
     last_result: dict[str, Any]
     # operator.add reducer: nodes append rather than replace
     artifacts: Annotated[list[str], operator.add]
+    # Non-blocking advisories raised by KIOs (e.g. an off-path concern a step
+    # noticed but wasn't asked to act on). Appended across steps; surfaced in the
+    # final report — never interrupts the workflow.
+    advisories: Annotated[list[dict], operator.add]
     feedback: str
     status: str
     error: str | None
@@ -35,6 +39,14 @@ class WorkflowGraphState(TypedDict):
     # True when the planner fell back to a default route (low routing confidence);
     # gates a plan-review HITL checkpoint before the first KIO runs.
     plan_confidence_low: bool
+
+    # --- Clarification (intake gate) ---
+    # Set by plan_node when the task is too vague/off-topic to plan; gates a
+    # clarify HITL checkpoint that asks the user what they mean (with options)
+    # before any KIO runs, then loops back to re-plan with the answer.
+    needs_clarification: bool
+    clarification: dict[str, Any]  # {"question": str, "options": list[str]}
+    clarify_attempts: int
 
     # --- Prompt router ---
     # Injected by /workflow/prompt; passed to kio1 so it can route on code+prompt

@@ -34,7 +34,7 @@ async def test_plan_workflow_signals_fallback_on_failure():
     client._client.post = AsyncMock(side_effect=RuntimeError("LM down"))
     client._client.aclose = AsyncMock()
 
-    kios, reasoning, used_fallback = await client.plan_workflow("fix the bug", "sess-1")
+    kios, reasoning, used_fallback, rejected = await client.plan_workflow("fix the bug", "sess-1")
 
     assert kios == list(_FALLBACK_SEQUENCE)
     assert used_fallback is True

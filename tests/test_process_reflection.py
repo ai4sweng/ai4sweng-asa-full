@@ -67,10 +67,38 @@ def test_unknown_partner_kio_passes_through():
     assert r.changed is False
 
 
-def test_length_capped_at_eight():
+def test_length_capped_at_twelve():
+    # Cap raised 8→12 to match the planner; a 9-step well-ordered plan now
+    # passes through intact rather than being silently truncated.
+    plan = ["kio2", "kio3", "kio4", "kio5", "kio6", "kio7", "kio8", "kio9", "kio10"]
+    r = validate_and_repair_plan(plan, has_repo=True, has_code=False)
+    assert len(r.sequence) <= 12
+    assert r.sequence == plan  # nothing dropped
+
+
+def test_length_cap_is_twelve_and_preserves_report():
+    # A 10-step well-ordered plan (the large-prompt case) must survive intact,
+    # report included — the old cap of 8 silently dropped kio8 here.
+    plan = ["kio3", "kio5", "kio12", "kio4", "kio11", "kio6", "kio7", "kio9", "kio10", "kio8"]
+    r = validate_and_repair_plan(plan, has_repo=True, has_code=True)
+    assert "kio8" in r.sequence
+    assert len(r.sequence) <= 12
+
+
+def test_requested_report_reinstated_when_planner_omits_it():
+    # User asked for a report but the planner forgot kio8 → it is appended as
+    # the terminal deliverable (the failing live multi-goal case).
     r = validate_and_repair_plan(
-        ["kio2", "kio3", "kio4", "kio5", "kio6", "kio7", "kio8", "kio9", "kio10"],
+        ["kio3", "kio5", "kio6", "kio7"],
         has_repo=True,
         has_code=False,
+        report_requested=True,
     )
-    assert len(r.sequence) <= 8
+    assert r.sequence[-1] == "kio8"
+    assert r.changed is True
+
+
+def test_report_not_added_when_not_requested():
+    # Default behavior is unchanged: no report is fabricated when none was asked.
+    r = validate_and_repair_plan(["kio3", "kio5"], has_repo=True, has_code=False)
+    assert "kio8" not in r.sequence

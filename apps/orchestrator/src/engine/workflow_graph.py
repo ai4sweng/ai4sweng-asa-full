@@ -2,7 +2,8 @@
 
 Graph topology
 --------------
-START → plan ──[should_review_plan]──► plan_review ─┐  (low routing confidence)
+START → plan ──[route_after_plan]──► plan_clarify ──► plan  (ambiguous request — ask & re-plan)
+              ├──────────────────────► plan_review ─┐      (low routing confidence)
               └────────────────────────────────────► run_kio ──[should_hitl]──► hitl → advance ──[should_continue]──► run_kio
                                                                             └──────────────► advance          └──────► complete → END
 
@@ -59,6 +60,7 @@ def build_workflow_graph(
 
     # Register nodes
     g.add_node("plan", nodes["plan"])
+    g.add_node("plan_clarify", nodes["plan_clarify"])
     g.add_node("plan_review", nodes["plan_review"])
     g.add_node("run_kio", nodes["run_kio"])
     g.add_node("hitl", nodes["hitl"])
@@ -67,12 +69,18 @@ def build_workflow_graph(
 
     # Edges
     g.add_edge(START, "plan")
-    # Confidence-gated HITL: low-confidence routes pause for plan approval first.
+    # Out of plan: ambiguous requests pause to ask the user (then loop back to
+    # re-plan); low-confidence routes pause for plan approval; else run.
     g.add_conditional_edges(
         "plan",
-        nodes["should_review_plan"],
-        {"plan_review": "plan_review", "run_kio": "run_kio"},
+        nodes["route_after_plan"],
+        {
+            "plan_clarify": "plan_clarify",
+            "plan_review": "plan_review",
+            "run_kio": "run_kio",
+        },
     )
+    g.add_edge("plan_clarify", "plan")
     g.add_edge("plan_review", "run_kio")
     g.add_conditional_edges(
         "run_kio",
