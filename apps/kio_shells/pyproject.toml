@@ -5,7 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "shared",
     "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
+    "uvicorn[standard]>=0.52.0",
     "loguru>=0.7",
 ]
 
